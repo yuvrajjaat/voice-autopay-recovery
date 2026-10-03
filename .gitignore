@@ -1,0 +1,37 @@
+# --- Secrets: never commit. .env.example holds placeholders instead. -------
+.env
+.env.*
+!.env.example
+
+# --- Mutable runtime state (data/customers.json IS committed) --------------
+data/runtime.json
+data/sessions.json
+
+# --- Demo artifacts that are large or contain audio -----------------------
+demo/recordings/
+*.mp3
+*.wav
+
+# --- Python ---------------------------------------------------------------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Editors / OS ---------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
