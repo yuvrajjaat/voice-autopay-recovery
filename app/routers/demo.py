@@ -176,6 +176,11 @@ async def get_session_state(session_id: str) -> SessionStateResponse:
         do_not_call=state.do_not_call,
         tool_calls=session.tool_calls,
         event_count=len(store.get_events(session_id)),
+        outcome=session.outcome,
+        call_completed=session.completed_at is not None,
+        completed_at=session.completed_at,
+        call_duration_seconds=session.call_duration_seconds,
+        transcript_turns=session.transcript_turns,
         created_at=session.created_at,
         last_tool_at=session.last_tool_at,
     )

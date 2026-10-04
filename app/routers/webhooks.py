@@ -1,9 +1,13 @@
 """ElevenLabs post-call webhook.
 
 ElevenLabs POSTs a transcript and some metadata after a conversation ends.
-This endpoint records that metadata against the session so the dashboard can
-show how long a call ran, and writes the transcript to ``demo/transcripts/``
-for the submission.
+This endpoint *finalizes* the session: it stamps a completion time, the
+provider's conversation id, the call duration and a transcript reference, then
+records one ``voice_call_completed`` event carrying the final outcome.
+
+Delivery is at-least-once, so finalisation is idempotent. A replay of the same
+conversation is recognised and acknowledged without writing a second event or
+disturbing what the first delivery recorded.
 
 What it deliberately does not do
 --------------------------------
@@ -18,6 +22,11 @@ agent misspoke.
 Authentication uses ``ELEVENLABS_WEBHOOK_SECRET`` with an HMAC over the raw
 body. The endpoint is open to the internet through the tunnel, so an
 unverified payload is rejected before it is parsed as anything meaningful.
+
+Whose account is it? The session's, always. The session id arrives as a
+dynamic variable and the customer comes from that session's binding. A
+``customer_id`` anywhere in the payload is ignored, so a forged or confused
+payload cannot attach a call to someone else's account.
 """
 
 from __future__ import annotations
@@ -26,6 +35,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -35,7 +45,7 @@ from fastapi import APIRouter, Header, Request
 from app import store
 from app.config import settings
 from app.errors import ToolError
-from app.models import EventType
+from app.models import EventType, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +57,14 @@ MAX_SIGNATURE_AGE_SECONDS = 30 * 60
 
 #: Refuse to parse an oversized body.
 MAX_BODY_BYTES = 2_000_000
+
+#: Cap on stored transcript turns, so a long call cannot bloat the repo.
+MAX_TRANSCRIPT_TURNS = 200
+
+#: Runs this long are card or account numbers. A transcript is a model's
+#: rendering of speech and should never carry one, but if a caller reads digits
+#: aloud despite the agent refusing them, they get redacted on the way to disk.
+_LONG_DIGIT_RUN = re.compile(r"\d{12,}")
 
 TRANSCRIPT_DIR = Path(__file__).resolve().parent.parent.parent / "demo" / "transcripts"
 
@@ -133,11 +151,23 @@ def _session_from_payload(data: dict[str, Any]) -> str | None:
     return None
 
 
-def _write_transcript(session_id: str, conversation_id: str, data: dict[str, Any]) -> Path | None:
-    """Save a readable transcript for the submission, if one was sent."""
+def _sanitise(message: str) -> str:
+    """Redact anything in a transcript line that looks like a credential."""
+    return _LONG_DIGIT_RUN.sub("[redacted]", message)
+
+
+def _write_transcript(
+    session_id: str, conversation_id: str, data: dict[str, Any]
+) -> tuple[Path | None, int]:
+    """Save a sanitised transcript and return ``(path, turns_written)``.
+
+    Only the file goes to disk; the session keeps a filename and a turn count,
+    never the text. Missing or malformed transcript fields are not an error -
+    plenty of payload types carry no transcript at all.
+    """
     turns = data.get("transcript")
     if not isinstance(turns, list) or not turns:
-        return None
+        return None, 0
 
     lines = [
         f"ElevenLabs conversation {conversation_id}",
@@ -145,19 +175,42 @@ def _write_transcript(session_id: str, conversation_id: str, data: dict[str, Any
         "=" * 66,
         "",
     ]
-    for turn in turns:
+    written = 0
+    for turn in turns[:MAX_TRANSCRIPT_TURNS]:
         if not isinstance(turn, dict):
             continue
         role = str(turn.get("role", "?"))
         message = str(turn.get("message") or "").strip()
         if message:
-            lines.append(f"{role.capitalize()}: {message}")
+            lines.append(f"{role.capitalize()}: {_sanitise(message)}")
+            written += 1
+
+    if not written:
+        return None, 0
+
+    if len(turns) > MAX_TRANSCRIPT_TURNS:
+        lines.append(f"\n[truncated after {MAX_TRANSCRIPT_TURNS} turns]")
 
     directory = _transcript_dir()
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"voice-{session_id}.txt"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return path
+    return path, written
+
+
+def _already_finalized(session_id: str, conversation_id: str) -> bool:
+    """Has this conversation already been finalized for this session?
+
+    Webhook delivery is at-least-once. Keyed on the provider's conversation
+    id so a genuine second conversation on the same session still records,
+    while a replay of the same one does not.
+    """
+    for event in store.get_events(session_id):
+        if event.get("event_type") != EventType.VOICE_CALL_COMPLETED.value:
+            continue
+        if (event.get("detail") or {}).get("conversation_id") == conversation_id:
+            return True
+    return False
 
 
 @router.post(
@@ -223,19 +276,55 @@ async def elevenlabs_post_call(
             "recorded": False,
         }
 
-    transcript_path = _write_transcript(session_id, conversation_id, data)
+    # Idempotency: a replayed delivery is acknowledged, not re-recorded.
+    if _already_finalized(session_id, conversation_id):
+        logger.info(
+            "post-call webhook for conversation %s already finalized; ignoring replay",
+            conversation_id,
+        )
+        return {
+            "received": True,
+            "type": event_type,
+            "conversation_id": conversation_id,
+            "matched_session": True,
+            "recorded": False,
+            "duplicate": True,
+            "outcome": session.outcome.value if session.outcome else None,
+        }
 
-    # Metadata only. No payment, disposition, or verification field is touched.
+    transcript_path, turns = _write_transcript(session_id, conversation_id, data)
+
+    # Finalise with what actually arrived. Absent fields are left alone rather
+    # than written as None, so a sparse delivery cannot erase what a previous
+    # one recorded, and nothing here touches payment, disposition or
+    # verification state - the tool calls own those.
+    finalisation: dict[str, Any] = {
+        "completed_at": utc_now(),
+        "conversation_id": conversation_id,
+    }
+    if isinstance(duration, (int, float)):
+        finalisation["call_duration_seconds"] = int(duration)
+    if transcript_path is not None:
+        finalisation["transcript_turns"] = turns
+        finalisation["transcript_file"] = transcript_path.name
+
+    session = store.update_session(session_id, **finalisation)
+
+    outcome = session.outcome.value if session.outcome else "unresolved"
     store.record_event(
         session_id,
         session.customer_id,
         EventType.VOICE_CALL_COMPLETED,
-        f"Voice conversation {conversation_id} finished.",
+        f"Call completed. Final outcome: {outcome}.",
         {
             "conversation_id": conversation_id,
             "event_type": event_type,
+            "outcome": outcome,
+            "completed_at": session.completed_at.isoformat()
+            if session.completed_at
+            else "",
             "duration_seconds": str(duration) if duration is not None else "unknown",
-            "transcript_saved": "yes" if transcript_path else "no",
+            "transcript_turns": str(turns) if turns else "0",
         },
     )
 
@@ -245,5 +334,7 @@ async def elevenlabs_post_call(
         "conversation_id": conversation_id,
         "matched_session": True,
         "recorded": True,
+        "duplicate": False,
+        "outcome": outcome,
         "transcript_saved": bool(transcript_path),
     }

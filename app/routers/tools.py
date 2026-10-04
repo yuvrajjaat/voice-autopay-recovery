@@ -828,6 +828,8 @@ async def log_disposition(request: LogDispositionRequest) -> DispositionResponse
         session_id=session.session_id,
     )
     store.touch_session(session.session_id)
+    # The outcome belongs to this conversation, not just to the customer.
+    store.update_session(session.session_id, outcome=request.disposition)
     store.record_event(
         session.session_id,
         customer.customer_id,

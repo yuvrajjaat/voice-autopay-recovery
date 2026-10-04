@@ -733,6 +733,12 @@ def reset_session(session_id: str) -> tuple[Session, int]:
                 # verified and skips the whole identity step.
                 "identity_verified": False,
                 "verification_attempts": 0,
+                "outcome": None,
+                "completed_at": None,
+                "conversation_id": None,
+                "call_duration_seconds": None,
+                "transcript_turns": None,
+                "transcript_file": None,
                 "last_tool_at": None,
             }
         )

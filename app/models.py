@@ -380,6 +380,21 @@ class Session(RuntimeModel):
     # left the next session pre-verified without saying a word.
     identity_verified: bool = False
     verification_attempts: int = 0
+
+    # How THIS conversation ended, set by log_disposition. The customer row
+    # keeps its own `disposition` as the ledger's last-known outcome, but that
+    # is per-customer: a second conversation would otherwise appear to have
+    # inherited the first one's result, the same way verification used to.
+    outcome: Disposition | None = None
+
+    # Post-call metadata, written once by the provider's webhook. Identifiers,
+    # counts and timestamps only - never a transcript body, never a secret.
+    completed_at: datetime | None = None
+    conversation_id: str | None = None
+    call_duration_seconds: int | None = None
+    transcript_turns: int | None = None
+    transcript_file: str | None = None
+
     created_at: datetime = Field(default_factory=utc_now)
     last_tool_at: datetime | None = None
 
@@ -683,6 +698,12 @@ class SessionStateResponse(BaseModel):
     do_not_call: bool
     tool_calls: int
     event_count: int
+    # Phase 7: the conversation's own outcome and completion metadata.
+    outcome: Disposition | None = None
+    call_completed: bool = False
+    completed_at: datetime | None = None
+    call_duration_seconds: int | None = None
+    transcript_turns: int | None = None
     created_at: datetime
     last_tool_at: datetime | None = None
 

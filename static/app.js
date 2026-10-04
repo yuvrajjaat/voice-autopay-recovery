@@ -225,8 +225,15 @@ async function refreshState() {
     ["Scheduled retry", state.scheduled_for || "&mdash;"],
     ["Payment link", yesNo(state.payment_link_prepared, false)],
     ["Escalated", state.escalated ? `<span class="pill pill-warn">${state.escalation_ticket}</span>` : yesNo(false, false)],
-    ["Disposition", state.disposition ? `<span class="mono">${state.disposition}</span>` : "&mdash;"],
+    ["Outcome", state.outcome ? `<span class="mono">${state.outcome}</span>` : "&mdash;"],
     ["Notes", state.disposition_notes || "&mdash;"],
+    [
+      "Call completed",
+      state.call_completed
+        ? `<span class="pill pill-ok">yes</span> <span class="muted">${timeOf(state.completed_at)}` +
+          `${state.call_duration_seconds ? `, ${state.call_duration_seconds}s` : ""}</span>`
+        : yesNo(false, false),
+    ],
     ["Do not call", yesNo(state.do_not_call, false)],
     ["Tool calls", String(state.tool_calls)],
   ];
