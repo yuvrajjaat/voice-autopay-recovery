@@ -1,0 +1,550 @@
+{
+  "_meta": {
+    "description": "Seed data for the autopay recovery voice agent demo.",
+    "record_count": 10,
+    "fictional": true,
+    "notice": "EVERY record on this file is invented. Names are fictional. Emails use example.com, an IANA-reserved domain that cannot receive mail. Phone numbers use the 555-0100..555-0199 block reserved for fictional use, and the dialler never reads them (it dials only DEMO_PHONE_NUMBER from .env). Card data is brand plus last-4 only: no card number, bank account, token, or any other payment credential exists anywhere in this repository, not even a fake-valid one.",
+    "mutability": "This file is a read-only seed. Everything the agent does at runtime is written to data/runtime.json instead, so a demo can be reset without touching this file.",
+    "amounts": "Money is stored as a decimal string (e.g. \"49.00\") and parsed as Decimal, never as a float.",
+    "generated_for": "Phase 1 - customer data + mock payment processor"
+  },
+  "customers": [
+    {
+      "customer_id": "CUST-001",
+      "name": "Maya Thompson",
+      "email": "maya.thompson@example.com",
+      "phone": "+14155550100",
+      "timezone": "America/Los_Angeles",
+      "address": {
+        "city": "San Francisco",
+        "state": "CA",
+        "postal_code": "94107"
+      },
+      "verification": {
+        "method": "postal_code",
+        "expected_answer": "94107",
+        "max_attempts": 2
+      },
+      "plan": {
+        "name": "Streaming Pro",
+        "billing_period": "monthly"
+      },
+      "autopay": {
+        "enabled": true,
+        "status": "failed",
+        "primary_method": {
+          "payment_method_id": "pm_mock_0001",
+          "type": "card",
+          "brand": "visa",
+          "last4": "4417",
+          "exp_month": 11,
+          "exp_year": 2027
+        },
+        "backup_method": null
+      },
+      "failed_payment": {
+        "payment_id": "pay_mock_0001",
+        "amount": "49.00",
+        "currency": "USD",
+        "due_date": "2026-09-28",
+        "failed_at": "2026-09-28T06:12:00Z",
+        "failure_code": "insufficient_funds",
+        "failure_reason_spoken": "the card was declined for insufficient funds",
+        "attempts_so_far": 1,
+        "days_delinquent": 6,
+        "service_suspension_date": null
+      },
+      "scenario": {
+        "label": "happy path",
+        "expected_path": "retry_succeeds",
+        "mock_retry_outcome": "succeed",
+        "caller_intent": "Agrees to retry the payment on the same card straight away.",
+        "caller_provides_answer": "94107"
+      }
+    },
+    {
+      "customer_id": "CUST-002",
+      "name": "Dev Patel",
+      "email": "dev.patel@example.com",
+      "phone": "+15125550101",
+      "timezone": "America/Chicago",
+      "address": {
+        "city": "Austin",
+        "state": "TX",
+        "postal_code": "78702"
+      },
+      "verification": {
+        "method": "postal_code",
+        "expected_answer": "78702",
+        "max_attempts": 2
+      },
+      "plan": {
+        "name": "Fiber 500",
+        "billing_period": "monthly"
+      },
+      "autopay": {
+        "enabled": true,
+        "status": "failed",
+        "primary_method": {
+          "payment_method_id": "pm_mock_0002",
+          "type": "card",
+          "brand": "mastercard",
+          "last4": "8203",
+          "exp_month": 8,
+          "exp_year": 2026
+        },
+        "backup_method": null
+      },
+      "failed_payment": {
+        "payment_id": "pay_mock_0002",
+        "amount": "129.99",
+        "currency": "USD",
+        "due_date": "2026-09-25",
+        "failed_at": "2026-09-25T06:05:00Z",
+        "failure_code": "expired_card",
+        "failure_reason_spoken": "the card on file has expired",
+        "attempts_so_far": 1,
+        "days_delinquent": 9,
+        "service_suspension_date": null
+      },
+      "scenario": {
+        "label": "expired card, retry is futile",
+        "expected_path": "payment_link_sent",
+        "mock_retry_outcome": "fail_expired_card",
+        "caller_intent": "Wants to pay with a different card. The agent must refuse to take card numbers by voice and send a secure link instead.",
+        "caller_provides_answer": "78702"
+      }
+    },
+    {
+      "customer_id": "CUST-003",
+      "name": "Elena Rossi",
+      "email": "elena.rossi@example.com",
+      "phone": "+16175550102",
+      "timezone": "America/New_York",
+      "address": {
+        "city": "Cambridge",
+        "state": "MA",
+        "postal_code": "02139"
+      },
+      "verification": {
+        "method": "postal_code",
+        "expected_answer": "02139",
+        "max_attempts": 2
+      },
+      "plan": {
+        "name": "Cloud Backup 2TB",
+        "billing_period": "monthly"
+      },
+      "autopay": {
+        "enabled": true,
+        "status": "failed",
+        "primary_method": {
+          "payment_method_id": "pm_mock_0003",
+          "type": "card",
+          "brand": "visa",
+          "last4": "1150",
+          "exp_month": 3,
+          "exp_year": 2028
+        },
+        "backup_method": {
+          "payment_method_id": "pm_mock_0003b",
+          "type": "card",
+          "brand": "amex",
+          "last4": "7762",
+          "exp_month": 6,
+          "exp_year": 2029
+        }
+      },
+      "failed_payment": {
+        "payment_id": "pay_mock_0003",
+        "amount": "19.00",
+        "currency": "USD",
+        "due_date": "2026-10-01",
+        "failed_at": "2026-10-01T06:03:00Z",
+        "failure_code": "card_declined",
+        "failure_reason_spoken": "the bank declined the charge",
+        "attempts_so_far": 1,
+        "days_delinquent": 3,
+        "service_suspension_date": null
+      },
+      "scenario": {
+        "label": "falls back to the backup card",
+        "expected_path": "retry_succeeds_on_backup",
+        "mock_retry_outcome": "succeed_on_backup",
+        "caller_intent": "Primary card keeps failing; agrees to use the American Express already on file.",
+        "caller_provides_answer": "02139"
+      }
+    },
+    {
+      "customer_id": "CUST-004",
+      "name": "Marcus Lee",
+      "email": "marcus.lee@example.com",
+      "phone": "+13125550103",
+      "timezone": "America/Chicago",
+      "address": {
+        "city": "Chicago",
+        "state": "IL",
+        "postal_code": "60614"
+      },
+      "verification": {
+        "method": "postal_code",
+        "expected_answer": "60614",
+        "max_attempts": 2
+      },
+      "plan": {
+        "name": "Equipment Lease",
+        "billing_period": "monthly"
+      },
+      "autopay": {
+        "enabled": true,
+        "status": "failed",
+        "primary_method": {
+          "payment_method_id": "pm_mock_0004",
+          "type": "card",
+          "brand": "visa",
+          "last4": "3391",
+          "exp_month": 1,
+          "exp_year": 2029
+        },
+        "backup_method": null
+      },
+      "failed_payment": {
+        "payment_id": "pay_mock_0004",
+        "amount": "250.00",
+        "currency": "USD",
+        "due_date": "2026-09-30",
+        "failed_at": "2026-09-30T06:20:00Z",
+        "failure_code": "insufficient_funds",
+        "failure_reason_spoken": "the card was declined for insufficient funds",
+        "attempts_so_far": 1,
+        "days_delinquent": 4,
+        "service_suspension_date": null
+      },
+      "scenario": {
+        "label": "defers to payday",
+        "expected_path": "retry_scheduled",
+        "mock_retry_outcome": "succeed",
+        "caller_intent": "Does not want to be charged today; asks to schedule the retry for payday on the 15th.",
+        "caller_provides_answer": "60614"
+      }
+    },
+    {
+      "customer_id": "CUST-005",
+      "name": "Aisha Noor",
+      "email": "aisha.noor@example.com",
+      "phone": "+14045550104",
+      "timezone": "America/New_York",
+      "address": {
+        "city": "Atlanta",
+        "state": "GA",
+        "postal_code": "30309"
+      },
+      "verification": {
+        "method": "postal_code",
+        "expected_answer": "30309",
+        "max_attempts": 2
+      },
+      "plan": {
+        "name": "Security Monitoring",
+        "billing_period": "monthly"
+      },
+      "autopay": {
+        "enabled": true,
+        "status": "failed",
+        "primary_method": {
+          "payment_method_id": "pm_mock_0005",
+          "type": "card",
+          "brand": "discover",
+          "last4": "6604",
+          "exp_month": 5,
+          "exp_year": 2028
+        },
+        "backup_method": null
+      },
+      "failed_payment": {
+        "payment_id": "pay_mock_0005",
+        "amount": "75.50",
+        "currency": "USD",
+        "due_date": "2026-10-02",
+        "failed_at": "2026-10-02T06:08:00Z",
+        "failure_code": "processor_network_error",
+        "failure_reason_spoken": "a temporary network problem at the payment processor stopped it going through",
+        "attempts_so_far": 1,
+        "days_delinquent": 2,
+        "service_suspension_date": null
+      },
+      "scenario": {
+        "label": "transient failure, clean recovery",
+        "expected_path": "retry_succeeds",
+        "mock_retry_outcome": "succeed",
+        "caller_intent": "Nothing is wrong with the card; happy to retry immediately.",
+        "caller_provides_answer": "30309"
+      }
+    },
+    {
+      "customer_id": "CUST-006",
+      "name": "Tomas Varga",
+      "email": "tomas.varga@example.com",
+      "phone": "+16125550105",
+      "timezone": "America/Chicago",
+      "address": {
+        "city": "Minneapolis",
+        "state": "MN",
+        "postal_code": "55401"
+      },
+      "verification": {
+        "method": "postal_code",
+        "expected_answer": "55401",
+        "max_attempts": 2
+      },
+      "plan": {
+        "name": "Fiber 500",
+        "billing_period": "monthly"
+      },
+      "autopay": {
+        "enabled": true,
+        "status": "failed",
+        "primary_method": {
+          "payment_method_id": "pm_mock_0006",
+          "type": "card",
+          "brand": "mastercard",
+          "last4": "9025",
+          "exp_month": 9,
+          "exp_year": 2027
+        },
+        "backup_method": null
+      },
+      "failed_payment": {
+        "payment_id": "pay_mock_0006",
+        "amount": "99.00",
+        "currency": "USD",
+        "due_date": "2026-09-20",
+        "failed_at": "2026-09-20T06:15:00Z",
+        "failure_code": "closed_account",
+        "failure_reason_spoken": "the bank reported the account behind the card is closed",
+        "attempts_so_far": 2,
+        "days_delinquent": 14,
+        "service_suspension_date": "2026-10-20"
+      },
+      "scenario": {
+        "label": "unrecoverable, needs a human",
+        "expected_path": "escalated",
+        "mock_retry_outcome": "fail_closed_account",
+        "caller_intent": "Says the bank closed the account after fraud; the situation is beyond what the agent can fix.",
+        "caller_provides_answer": "55401"
+      }
+    },
+    {
+      "customer_id": "CUST-007",
+      "name": "Grace Oyelaran",
+      "email": "grace.oyelaran@example.com",
+      "phone": "+12155550106",
+      "timezone": "America/New_York",
+      "address": {
+        "city": "Philadelphia",
+        "state": "PA",
+        "postal_code": "19104"
+      },
+      "verification": {
+        "method": "postal_code",
+        "expected_answer": "19104",
+        "max_attempts": 2
+      },
+      "plan": {
+        "name": "Streaming Pro",
+        "billing_period": "annual"
+      },
+      "autopay": {
+        "enabled": true,
+        "status": "failed",
+        "primary_method": {
+          "payment_method_id": "pm_mock_0007",
+          "type": "card",
+          "brand": "visa",
+          "last4": "5518",
+          "exp_month": 2,
+          "exp_year": 2028
+        },
+        "backup_method": null
+      },
+      "failed_payment": {
+        "payment_id": "pay_mock_0007",
+        "amount": "35.00",
+        "currency": "USD",
+        "due_date": "2026-10-01",
+        "failed_at": "2026-10-01T06:02:00Z",
+        "failure_code": "incorrect_cvc",
+        "failure_reason_spoken": "the security code on file did not match",
+        "attempts_so_far": 1,
+        "days_delinquent": 3,
+        "service_suspension_date": null
+      },
+      "scenario": {
+        "label": "identity verification fails",
+        "expected_path": "verification_failed",
+        "mock_retry_outcome": "succeed",
+        "caller_intent": "Cannot produce the postal code on the account. The agent must disclose nothing about the balance and end the call politely.",
+        "caller_provides_answer": "19147"
+      }
+    },
+    {
+      "customer_id": "CUST-008",
+      "name": "Henry Walsh",
+      "email": "henry.walsh@example.com",
+      "phone": "+12065550107",
+      "timezone": "America/Los_Angeles",
+      "address": {
+        "city": "Seattle",
+        "state": "WA",
+        "postal_code": "98104"
+      },
+      "verification": {
+        "method": "postal_code",
+        "expected_answer": "98104",
+        "max_attempts": 2
+      },
+      "plan": {
+        "name": "Business Line x4",
+        "billing_period": "monthly"
+      },
+      "autopay": {
+        "enabled": true,
+        "status": "failed",
+        "primary_method": {
+          "payment_method_id": "pm_mock_0008",
+          "type": "card",
+          "brand": "visa",
+          "last4": "2048",
+          "exp_month": 7,
+          "exp_year": 2027
+        },
+        "backup_method": null
+      },
+      "failed_payment": {
+        "payment_id": "pay_mock_0008",
+        "amount": "410.00",
+        "currency": "USD",
+        "due_date": "2026-09-27",
+        "failed_at": "2026-09-27T06:30:00Z",
+        "failure_code": "do_not_honor",
+        "failure_reason_spoken": "the bank declined the charge without giving a reason",
+        "attempts_so_far": 1,
+        "days_delinquent": 7,
+        "service_suspension_date": null
+      },
+      "scenario": {
+        "label": "disputes the charge",
+        "expected_path": "escalated",
+        "mock_retry_outcome": "fail_do_not_honor",
+        "caller_intent": "Insists two of the four lines were cancelled in August and refuses any retry until the amount is corrected.",
+        "caller_provides_answer": "98104"
+      }
+    },
+    {
+      "customer_id": "CUST-009",
+      "name": "Priya Raman",
+      "email": "priya.raman@example.com",
+      "phone": "+16025550108",
+      "timezone": "America/Phoenix",
+      "address": {
+        "city": "Phoenix",
+        "state": "AZ",
+        "postal_code": "85004"
+      },
+      "verification": {
+        "method": "postal_code",
+        "expected_answer": "85004",
+        "max_attempts": 2
+      },
+      "plan": {
+        "name": "Streaming Basic",
+        "billing_period": "monthly"
+      },
+      "autopay": {
+        "enabled": true,
+        "status": "failed",
+        "primary_method": {
+          "payment_method_id": "pm_mock_0009",
+          "type": "card",
+          "brand": "visa",
+          "last4": "7731",
+          "exp_month": 4,
+          "exp_year": 2027
+        },
+        "backup_method": null
+      },
+      "failed_payment": {
+        "payment_id": "pay_mock_0009",
+        "amount": "12.99",
+        "currency": "USD",
+        "due_date": "2026-09-20",
+        "failed_at": "2026-09-20T06:11:00Z",
+        "failure_code": "insufficient_funds",
+        "failure_reason_spoken": "the card was declined for insufficient funds",
+        "attempts_so_far": 3,
+        "days_delinquent": 14,
+        "service_suspension_date": "2026-10-18"
+      },
+      "scenario": {
+        "label": "repeat failure, retry declines again",
+        "expected_path": "retry_fails",
+        "mock_retry_outcome": "fail_insufficient_funds",
+        "caller_intent": "Agrees to a retry, but the funds still are not there. The agent must stay firm about the balance without pressuring or threatening.",
+        "caller_provides_answer": "85004"
+      }
+    },
+    {
+      "customer_id": "CUST-010",
+      "name": "Sam Okafor",
+      "email": "sam.okafor@example.com",
+      "phone": "+14055550109",
+      "timezone": "America/Chicago",
+      "address": {
+        "city": "Oklahoma City",
+        "state": "OK",
+        "postal_code": "73102"
+      },
+      "verification": {
+        "method": "postal_code",
+        "expected_answer": "73102",
+        "max_attempts": 2
+      },
+      "plan": {
+        "name": "Smart Home Plus",
+        "billing_period": "monthly"
+      },
+      "autopay": {
+        "enabled": true,
+        "status": "failed",
+        "primary_method": {
+          "payment_method_id": "pm_mock_0010",
+          "type": "card",
+          "brand": "mastercard",
+          "last4": "4190",
+          "exp_month": 10,
+          "exp_year": 2028
+        },
+        "backup_method": null
+      },
+      "failed_payment": {
+        "payment_id": "pay_mock_0010",
+        "amount": "64.00",
+        "currency": "USD",
+        "due_date": "2026-09-29",
+        "failed_at": "2026-09-29T06:09:00Z",
+        "failure_code": "3ds_required",
+        "failure_reason_spoken": "the bank asked for extra verification that autopay cannot complete on its own",
+        "attempts_so_far": 1,
+        "days_delinquent": 5,
+        "service_suspension_date": null
+      },
+      "scenario": {
+        "label": "opts out of calls",
+        "expected_path": "do_not_call",
+        "mock_retry_outcome": "succeed",
+        "caller_intent": "Asks not to be called again. The agent must honour it immediately, with no pushback and no retry attempt.",
+        "caller_provides_answer": "73102"
+      }
+    }
+  ]
+}

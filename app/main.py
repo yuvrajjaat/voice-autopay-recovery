@@ -29,7 +29,7 @@ logger = logging.getLogger("app")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Log a readable startup banner, then hand over to the server."""
-    logger.info("%s v%s starting (phase 0 - skeleton)", settings.app_name, __version__)
+    logger.info("%s v%s starting (phase 1 - data + mock payments)", settings.app_name, __version__)
     # The dial-safety toggle is reported separately below; it is a switch, not
     # a credential, so listing it as "not configured" would read as a problem.
     ready = {
@@ -76,7 +76,7 @@ async def healthz() -> dict[str, Any]:
         "status": "ok",
         "service": settings.app_name,
         "version": __version__,
-        "phase": "0 - skeleton",
+        "phase": "1 - customer data + mock payment processor",
         "config": settings.readiness(),
     }
 
