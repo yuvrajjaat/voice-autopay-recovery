@@ -37,6 +37,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.config import settings
+from pydantic import BaseModel
+
 from app.models import (
     AutopayStatus,
     Customer,
@@ -245,6 +247,30 @@ def reset_runtime() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _without_stale_fields(record: dict[str, Any], model: type[BaseModel]) -> dict[str, Any]:
+    """Drop stored keys that the model no longer defines.
+
+    Runtime models use ``extra="forbid"``, which is right for data we write but
+    wrong for data we read back: a runtime.json written before a field moved
+    would otherwise fail validation and take the whole dashboard down with it.
+    Verification moved from the customer row to the session, and an existing
+    file still carries the old keys.
+
+    Unknown keys are discarded with a debug line rather than silently honoured,
+    so stale state cannot influence current behaviour.
+    """
+    known = set(model.model_fields)
+    stale = set(record) - known
+    if stale:
+        logger.debug(
+            "ignoring %d stale field(s) on a stored %s: %s",
+            len(stale),
+            model.__name__,
+            ", ".join(sorted(stale)),
+        )
+    return {key: value for key, value in record.items() if key in known}
+
+
 def get_state(customer_id: str) -> CustomerState:
     """Current mutable state for a customer, defaulted from the seed.
 
@@ -259,7 +285,7 @@ def get_state(customer_id: str) -> CustomerState:
             customer_id=customer_id,
             status=customer.autopay.status,
         )
-    return CustomerState.model_validate(stored)
+    return CustomerState.model_validate(_without_stale_fields(stored, CustomerState))
 
 
 def update_state(customer_id: str, **changes: Any) -> CustomerState:
@@ -293,7 +319,7 @@ def all_states() -> dict[str, CustomerState]:
     for customer_id, customer in load_customers().items():
         stored = document["customer_state"].get(customer_id)
         states[customer_id] = (
-            CustomerState.model_validate(stored)
+            CustomerState.model_validate(_without_stale_fields(stored, CustomerState))
             if stored
             else CustomerState(customer_id=customer_id, status=customer.autopay.status)
         )
@@ -516,7 +542,7 @@ def get_session(session_id: str) -> Session:
     stored = document["sessions"].get(session_id)
     if stored is None:
         raise SessionNotFoundError(f"No session with id {session_id!r}")
-    return Session.model_validate(stored)
+    return Session.model_validate(_without_stale_fields(stored, Session))
 
 
 def _save_session(session: Session) -> Session:
@@ -545,6 +571,20 @@ def touch_session(session_id: str, *, retry: bool = False) -> Session:
         return _save_session(updated)
 
 
+def update_session(session_id: str, **changes: Any) -> Session:
+    """Apply field changes to a session and persist them.
+
+    Unknown field names raise, so a typo cannot silently write a field that
+    nothing reads — the same guard ``update_state`` uses for customer rows.
+    """
+    with _lock:
+        session = get_session(session_id)
+        unknown = set(changes) - set(Session.model_fields)
+        if unknown:
+            raise ValueError(f"Unknown Session field(s): {', '.join(sorted(unknown))}")
+        return _save_session(session.model_copy(update=changes))
+
+
 def close_session(session_id: str) -> Session:
     """Mark a session finished. Later tool calls on it are rejected."""
     with _lock:
@@ -555,7 +595,10 @@ def close_session(session_id: str) -> Session:
 def list_sessions() -> list[Session]:
     """Every session, oldest first."""
     document = load_runtime()
-    return [Session.model_validate(record) for record in document["sessions"].values()]
+    return [
+        Session.model_validate(_without_stale_fields(record, Session))
+        for record in document["sessions"].values()
+    ]
 
 
 def get_scheduled_retries(customer_id: str | None = None) -> list[dict[str, Any]]:
@@ -685,6 +728,11 @@ def reset_session(session_id: str) -> tuple[Session, int]:
                 "closed": False,
                 "tool_calls": 0,
                 "retry_attempts": 0,
+                # Verification lives on the session, so a reset has to clear
+                # it as well - otherwise the replayed demo starts already
+                # verified and skips the whole identity step.
+                "identity_verified": False,
+                "verification_attempts": 0,
                 "last_tool_at": None,
             }
         )

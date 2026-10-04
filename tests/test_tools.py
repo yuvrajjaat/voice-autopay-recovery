@@ -45,9 +45,13 @@ def open_session(customer_id: str, session_id: str | None = None) -> str:
 
 
 def verified_session(customer_id: str) -> str:
-    """A session whose customer has already passed verification."""
+    """A session that has already passed verification.
+
+    Verification is session-scoped, so this marks the session rather than the
+    customer row.
+    """
     session_id = open_session(customer_id)
-    store.update_state(customer_id, identity_verified=True, verification_attempts=1)
+    store.update_session(session_id, identity_verified=True, verification_attempts=1)
     return session_id
 
 
@@ -333,8 +337,8 @@ def test_successful_verification_updates_runtime_state(client: TestClient) -> No
     assert body["success"] is True
     assert body["verified"] is True
     assert body["locked"] is False
-    assert store.get_state("CUST-001").identity_verified is True
-    assert store.get_state("CUST-001").verification_attempts == 1
+    assert store.get_session(session_id).identity_verified is True
+    assert store.get_session(session_id).verification_attempts == 1
 
 
 def test_verification_tolerates_spacing_and_case(client: TestClient) -> None:
@@ -355,7 +359,7 @@ def test_wrong_answer_leaves_one_attempt(client: TestClient) -> None:
     assert body["verified"] is False
     assert body["attempts_remaining"] == 1
     assert body["locked"] is False
-    assert store.get_state("CUST-007").identity_verified is False
+    assert store.get_session(session_id).identity_verified is False
 
 
 def test_verification_locks_after_the_attempt_limit(client: TestClient) -> None:
@@ -370,7 +374,7 @@ def test_verification_locks_after_the_attempt_limit(client: TestClient) -> None:
     assert body["locked"] is True
     assert body["attempts_remaining"] == 0
     # The correct answer arriving after lockout must not unlock the account.
-    assert store.get_state("CUST-007").identity_verified is False
+    assert store.get_session(session_id).identity_verified is False
 
 
 def test_locked_verification_does_not_keep_counting_attempts(
@@ -379,7 +383,7 @@ def test_locked_verification_does_not_keep_counting_attempts(
     session_id = open_session("CUST-007")
     for _ in range(4):
         call(client, "verify_identity", {"session_id": session_id, "postal_code": "00000"})
-    assert store.get_state("CUST-007").verification_attempts == 2
+    assert store.get_session(session_id).verification_attempts == 2
 
 
 def test_verification_is_idempotent_once_passed(client: TestClient) -> None:
@@ -388,7 +392,7 @@ def test_verification_is_idempotent_once_passed(client: TestClient) -> None:
         client, "verify_identity", {"session_id": session_id, "postal_code": "00000"}
     ).json()
     assert body["verified"] is True
-    assert store.get_state("CUST-001").verification_attempts == 1
+    assert store.get_session(session_id).verification_attempts == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1013,3 +1017,258 @@ def test_tool_modules_import_no_network_or_provider_sdk() -> None:
         text = Path(module).read_text(encoding="utf-8")
         for needle in banned:
             assert needle not in text, f"{module} must not reference {needle}"
+
+
+# ---------------------------------------------------------------------------
+# Verification regressions
+#
+# A live voice call stated the correct postal code for CUST-001 and still
+# ended as verification_failed, and a second session for the same customer
+# failed before it compared anything. Root cause: identity_verified and
+# verification_attempts lived on the customer row, so they persisted between
+# conversations. These tests pin the corrected behaviour.
+# ---------------------------------------------------------------------------
+
+
+def test_cust_001_verifies_with_94107_on_the_first_attempt(client: TestClient) -> None:
+    """The exact case that failed live."""
+    session_id = open_session("CUST-001")
+    body = call(
+        client, "verify_identity", {"session_id": session_id, "postal_code": "94107"}
+    ).json()
+
+    assert body["verified"] is True
+    assert body["locked"] is False
+    assert body["attempts_remaining"] == 1
+    assert store.get_session(session_id).identity_verified is True
+    assert store.get_session(session_id).verification_attempts == 1
+
+
+@pytest.mark.parametrize(
+    "stated",
+    [
+        "94107",
+        "9 4 1 0 7",
+        " 94107 ",
+        "94107.",
+        "94107,",
+        "9-4-1-0-7",
+        "nine four one oh seven",
+        "Nine Four One Zero Seven",
+        "9 4 1 o 7",
+    ],
+)
+def test_the_spoken_forms_a_voice_agent_sends_all_verify(
+    client: TestClient, stated: str
+) -> None:
+    """Representation varies; the answer does not."""
+    session_id = open_session("CUST-001")
+    body = call(
+        client, "verify_identity", {"session_id": session_id, "postal_code": stated}
+    ).json()
+    assert body["verified"] is True, f"{stated!r} should verify"
+
+
+@pytest.mark.parametrize(
+    "stated", ["19147", "00000", "9410", "941077", "ninety four one"]
+)
+def test_a_wrong_postal_code_still_fails(client: TestClient, stated: str) -> None:
+    """Normalisation must not become a free pass."""
+    session_id = open_session("CUST-001")
+    body = call(
+        client, "verify_identity", {"session_id": session_id, "postal_code": stated}
+    ).json()
+    assert body["verified"] is False, f"{stated!r} must not verify"
+    assert store.get_session(session_id).identity_verified is False
+
+
+def test_a_fresh_session_is_never_pre_locked_by_an_earlier_one(
+    client: TestClient,
+) -> None:
+    """Bug 1: an earlier conversation must not lock the account forever."""
+    first = open_session("CUST-001", "sess_first")
+    for wrong in ("00000", "11111"):
+        call(client, "verify_identity", {"session_id": first, "postal_code": wrong})
+    assert store.get_session(first).verification_attempts == 2
+
+    second = open_session("CUST-001", "sess_second")
+    assert store.get_session(second).verification_attempts == 0
+
+    body = call(
+        client, "verify_identity", {"session_id": second, "postal_code": "94107"}
+    ).json()
+    assert body["verified"] is True, "a new conversation must get its own attempts"
+    assert body["locked"] is False
+    assert body["attempts_remaining"] == 1
+
+
+def test_a_fresh_session_is_never_pre_verified_by_an_earlier_one(
+    client: TestClient,
+) -> None:
+    """Bug 2, the security half: verification must not be inherited.
+
+    Otherwise a second caller reaching the same account would be handed the
+    balance without saying anything.
+    """
+    first = open_session("CUST-001", "sess_v1")
+    assert call(
+        client, "verify_identity", {"session_id": first, "postal_code": "94107"}
+    ).json()["verified"]
+
+    second = open_session("CUST-001", "sess_v2")
+    assert store.get_session(second).identity_verified is False
+
+    details = call(client, "get_failed_payment_details", {"session_id": second}).json()
+    assert details["verified"] is False
+    assert details["amount"] is None
+    assert details["card_description"] is None
+
+    assert call(client, "retry_payment", {"session_id": second}).status_code == 403
+
+
+def test_a_verified_session_cannot_be_reverted_by_a_later_failure(
+    client: TestClient,
+) -> None:
+    """A correct first attempt must survive whatever follows."""
+    session_id = open_session("CUST-001")
+    assert call(
+        client, "verify_identity", {"session_id": session_id, "postal_code": "94107"}
+    ).json()["verified"]
+
+    # Further calls with a wrong code must not undo it, nor burn attempts.
+    for wrong in ("00000", "11111", "99999"):
+        body = call(
+            client, "verify_identity", {"session_id": session_id, "postal_code": wrong}
+        ).json()
+        assert body["verified"] is True, "verification was revoked"
+        assert body["locked"] is False
+
+    session = store.get_session(session_id)
+    assert session.identity_verified is True
+    assert session.verification_attempts == 1, "idempotent calls must not count"
+
+    # And the gated tools still work.
+    assert call(client, "retry_payment", {"session_id": session_id}).json()["success"]
+
+
+def test_another_sessions_failure_cannot_revoke_a_verified_session(
+    client: TestClient,
+) -> None:
+    """Two conversations on one customer must not interfere."""
+    verified = open_session("CUST-001", "sess_ok")
+    assert call(
+        client, "verify_identity", {"session_id": verified, "postal_code": "94107"}
+    ).json()["verified"]
+
+    other = open_session("CUST-001", "sess_bad")
+    for wrong in ("00000", "11111"):
+        call(client, "verify_identity", {"session_id": other, "postal_code": wrong})
+
+    assert store.get_session(verified).identity_verified is True
+    assert (
+        call(client, "get_failed_payment_details", {"session_id": verified}).json()[
+            "amount"
+        ]
+        == "49.00"
+    )
+
+
+def test_exactly_two_attempts_are_allowed_per_conversation(client: TestClient) -> None:
+    """The cap is two comparisons; a third call compares nothing."""
+    session_id = open_session("CUST-007")
+    limit = store.get_customer("CUST-007").verification.max_attempts
+    assert limit == 2
+
+    first = call(
+        client, "verify_identity", {"session_id": session_id, "postal_code": "00000"}
+    ).json()
+    assert first["attempts_remaining"] == 1
+    assert first["locked"] is False
+
+    second = call(
+        client, "verify_identity", {"session_id": session_id, "postal_code": "11111"}
+    ).json()
+    assert second["attempts_remaining"] == 0
+    assert second["locked"] is True
+
+    # The third call is the locked branch: 200, but no comparison and no
+    # further attempt recorded. This is why a live call logged three 200s.
+    third = call(
+        client, "verify_identity", {"session_id": session_id, "postal_code": "19104"}
+    )
+    assert third.status_code == 200
+    assert third.json()["locked"] is True
+    assert third.json()["verified"] is False
+    assert (
+        store.get_session(session_id).verification_attempts == 2
+    ), "a locked call must not count as an attempt"
+    assert (
+        store.get_session(session_id).identity_verified is False
+    ), "the correct code arriving after lockout must not unlock"
+
+
+def test_the_received_postal_code_maps_into_the_request_model(
+    client: TestClient,
+) -> None:
+    """The field name the provider sends must bind to the Pydantic field."""
+    from app.models import VerifyIdentityRequest
+
+    assert "postal_code" in VerifyIdentityRequest.model_fields
+    session_id = open_session("CUST-001")
+
+    # The exact body shape ElevenLabs posts.
+    response = client.post(
+        "/tools/verify_identity",
+        json={"session_id": session_id, "postal_code": "94107"},
+        headers=AUTH,
+    )
+    assert response.status_code == 200
+    assert response.json()["verified"] is True
+
+    # A misnamed field is a validation error, not a silent failure.
+    bad = client.post(
+        "/tools/verify_identity",
+        json={"session_id": session_id, "postalCode": "94107"},
+        headers=AUTH,
+    )
+    assert bad.status_code == 422
+
+
+def test_a_long_spoken_answer_is_not_rejected_as_too_long(client: TestClient) -> None:
+    """max_length used to be 16, which 422'd any spoken digit sequence."""
+    session_id = open_session("CUST-001")
+    response = call(
+        client,
+        "verify_identity",
+        {"session_id": session_id, "postal_code": "nine four one oh seven"},
+    )
+    assert response.status_code == 200
+    assert response.json()["verified"] is True
+
+
+def test_verification_attempts_are_counted_after_comparison_not_before(
+    client: TestClient,
+) -> None:
+    """A successful first attempt leaves one attempt unspent, not zero."""
+    session_id = open_session("CUST-001")
+    body = call(
+        client, "verify_identity", {"session_id": session_id, "postal_code": "94107"}
+    ).json()
+    assert body["attempts_remaining"] == 1
+    assert store.get_session(session_id).verification_attempts == 1
+
+
+def test_the_diagnostic_log_never_records_the_expected_answer(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The temporary logging must not leak the credential it checks."""
+    session_id = open_session("CUST-001")
+    with caplog.at_level("INFO", logger="app.routers.tools"):
+        call(
+            client, "verify_identity", {"session_id": session_id, "postal_code": "00000"}
+        )
+
+    assert "verify_identity diagnostic" in caplog.text
+    assert "matched=False" in caplog.text
+    assert "CUST-001" in caplog.text
+    assert "94107" not in caplog.text, "the expected answer must never be logged"

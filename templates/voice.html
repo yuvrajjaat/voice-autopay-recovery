@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Autopay Recovery — Voice Demo</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div>
+    <h1>Voice agent <span class="muted">autopay recovery demo</span></h1>
+    <p class="subtitle">
+      Fictional customers, mocked payments. Speak to the agent through your
+      microphone; it calls the same seven backend tools the dashboard shows.
+    </p>
+  </div>
+  <div class="badges">
+    <span id="status-pill" class="pill pill-neutral">idle</span>
+    <a class="pill pill-neutral" href="/dashboard">dashboard &rarr;</a>
+  </div>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+{% if not eleven.ready_for_voice %}
+<div class="banner">
+  <strong>ElevenLabs is not configured.</strong>
+  Set the following in <code>.env</code>, then restart:
+  <ul class="setup">
+    {% if not eleven.configured %}<li><code>ELEVENLABS_API_KEY</code></li>{% endif %}
+    {% if not eleven.agent_id %}<li><code>ELEVENLABS_AGENT_ID</code> — run <code>python scripts/provision_agent.py</code> to get one</li>{% endif %}
+    {% if not eleven.tool_auth_configured %}<li><code>TOOL_SHARED_SECRET</code></li>{% endif %}
+    {% if not eleven.public_base_url %}<li><code>PUBLIC_BASE_URL</code> — the https address of your tunnel</li>{% endif %}
+  </ul>
+  You can still select a customer and create a session; the voice conversation
+  will not start until the above are set.
+</div>
+{% endif %}
+
+<main class="layout">
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>1 &middot; Customer</h2>
+      <span id="customer-count" class="muted"></span>
+    </div>
+    <label class="field">
+      <select id="customer" aria-label="Fictional customer">
+        <option value="">Loading…</option>
+      </select>
+    </label>
+    <p id="customer-note" class="hint" hidden></p>
+    <p class="hint">
+      The postal code the agent asks for is in
+      <code>data/customers.json</code>. It is deliberately not served to this
+      page.
+    </p>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>2 &middot; Conversation</h2></div>
+    <div class="controls">
+      <button id="btn-start" class="primary">Start conversation</button>
+      <button id="btn-end" class="danger" disabled>End conversation</button>
+    </div>
+    <dl id="session" class="kv">
+      <div class="kv-empty muted">No session yet.</div>
+    </dl>
+    <div id="agent-host" class="agent-host" hidden></div>
+    <p id="mic-hint" class="hint" hidden>
+      Allow microphone access, then press the call button in the widget above
+      to begin speaking.
+    </p>
+  </section>
+
+</main>
+
+<footer class="footer muted">
+  Fictional customers &middot; mocked payment processor &middot; browser microphone only, no telephony
+</footer>
+
+<script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
+<script src="/static/voice.js"></script>
+</body>
+</html>

@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from app import store
+from app.routers import webhooks
 
 
 @pytest.fixture(autouse=True)
@@ -25,6 +26,9 @@ def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     runtime_file = tmp_path / "runtime.json"
     monkeypatch.setattr(store, "_runtime_path", lambda: runtime_file)
     monkeypatch.setattr(store, "_customers_cache", None)
+    # The post-call webhook saves transcripts; keep those out of the committed
+    # demo/transcripts folder too.
+    monkeypatch.setattr(webhooks, "_transcript_dir", lambda: tmp_path / "transcripts")
     return runtime_file
 
 

@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import settings
 from app.dial_safety import posture
+from app.providers import elevenlabs_client as provider
 
 router = APIRouter(tags=["dashboard"])
 
@@ -36,4 +37,19 @@ async def dashboard(request: Request) -> HTMLResponse:
             "tool_auth_configured": bool(settings.tool_shared_secret),
             "dial": posture(),
         },
+    )
+
+
+@router.get("/voice", response_class=HTMLResponse, summary="Browser voice demo")
+async def voice(request: Request) -> HTMLResponse:
+    """Render the microphone demo page.
+
+    Passes only the provider's readiness flags and ids - never the API key,
+    the webhook secret, or the tool secret. The page fetches its customer list
+    and its signed URL from /api/* after load.
+    """
+    return templates.TemplateResponse(
+        request,
+        "voice.html",
+        {"eleven": provider.status()},
     )

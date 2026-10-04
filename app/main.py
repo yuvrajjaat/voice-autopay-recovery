@@ -26,7 +26,7 @@ from app.errors import (
     unhandled_error_handler,
     validation_error_handler,
 )
-from app.routers import demo, pages, tools
+from app.routers import demo, pages, tools, webhooks
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level),
@@ -39,7 +39,7 @@ logger = logging.getLogger("app")
 async def lifespan(_app: FastAPI):
     """Log a readable startup banner, then hand over to the server."""
     logger.info(
-        "%s v%s starting (phase 3 - dashboard)", settings.app_name, __version__
+        "%s v%s starting (phase 6 - voice agent)", settings.app_name, __version__
     )
     # The dial-safety toggle is reported separately below; it is a switch, not
     # a credential, so listing it as "not configured" would read as a problem.
@@ -78,6 +78,7 @@ app.add_exception_handler(Exception, unhandled_error_handler)
 app.include_router(tools.router)  # Phase 2 — the agent's seven tools
 app.include_router(demo.router)  # Phase 3 — local demo control plane
 app.include_router(pages.router)  # Phase 3 — the dashboard page
+app.include_router(webhooks.router)  # Phase 6 — post-call metadata
 
 # Dashboard assets. Mounted from an absolute path so the server can be
 # started from any working directory.
@@ -87,8 +88,6 @@ app.mount(
     name="static",
 )
 
-# Routers still to come:
-#   app.include_router(webhooks.router)  # Phase 7 — post-call transcripts
 
 
 @app.get("/healthz", tags=["system"])
@@ -102,7 +101,7 @@ async def healthz() -> dict[str, Any]:
         "status": "ok",
         "service": settings.app_name,
         "version": __version__,
-        "phase": "3 - demo control plane and dashboard",
+        "phase": "6 - elevenlabs voice agent",
         "config": settings.readiness(),
     }
 
@@ -116,4 +115,5 @@ async def root() -> dict[str, str]:
         "health": "/healthz",
         "docs": "/docs",
         "dashboard": "/dashboard",
+        "voice": "/voice",
     }

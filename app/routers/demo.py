@@ -27,6 +27,7 @@ import logging
 from fastapi import APIRouter
 
 from app import store
+from app.agent.prompt import build_dynamic_variables
 from app.errors import ToolError
 from app.models import (
     CreateSessionRequest,
@@ -158,8 +159,8 @@ async def get_session_state(session_id: str) -> SessionStateResponse:
         customer_name=customer.name,
         status=_status_of(session),
         channel=session.channel,
-        identity_verified=state.identity_verified,
-        verification_attempts=state.verification_attempts,
+        identity_verified=session.identity_verified,
+        verification_attempts=session.verification_attempts,
         verification_attempts_allowed=customer.verification.max_attempts,
         payment_status=state.status,
         amount_due=customer.failed_payment.amount_spoken,
@@ -238,6 +239,121 @@ async def reset_session(session_id: str) -> ResetSessionResponse:
         ),
         records_cleared=cleared,
     )
+
+
+@router.get(
+    "/sessions",
+    response_model=list[CreateSessionResponse],
+    summary="Sessions, newest first, optionally for one customer",
+)
+async def list_sessions(
+    customer_id: str | None = None,
+    limit: int = 20,
+) -> list[CreateSessionResponse]:
+    """List sessions so the dashboard can find one it did not create.
+
+    This exists because the dashboard and the voice page are separate pages.
+    A conversation started at ``/voice`` has a session the dashboard has never
+    heard of, so without a way to look sessions up the dashboard sits on "No
+    session yet" while a call runs. Newest first, because the interesting
+    session is almost always the most recent one.
+
+    Read-only, like the rest of the dashboard's view of the world: it creates
+    nothing and changes nothing.
+    """
+    customers = store.load_customers()
+    sessions = store.list_sessions()
+
+    if customer_id is not None:
+        # Validate rather than silently returning an empty list, so a typo in
+        # a query string is distinguishable from "this customer has none".
+        _load_customer(customer_id)
+        sessions = [s for s in sessions if s.customer_id == customer_id]
+
+    newest_first = sorted(sessions, key=lambda s: s.created_at, reverse=True)
+    return [
+        CreateSessionResponse(
+            session_id=session.session_id,
+            customer_id=session.customer_id,
+            customer_name=(
+                customers[session.customer_id].name
+                if session.customer_id in customers
+                else session.customer_id
+            ),
+            status=_status_of(session),
+            channel=session.channel,
+            created_at=session.created_at,
+        )
+        for session in newest_first[: max(1, min(limit, 100))]
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Voice connection
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/voice/connection/{session_id}",
+    summary="What the browser needs to open a voice conversation",
+)
+async def voice_connection(session_id: str) -> dict[str, object]:
+    """Hand the page everything it needs to start talking - and no secrets.
+
+    Two things come back. A **signed URL**, minted server-side, which lets the
+    browser open one conversation without ever seeing the API key; the page
+    falls back to the bare agent id only when a signed URL cannot be obtained
+    (an agent with authentication disabled). And the **dynamic variables**,
+    built by ``app.agent.prompt``, which carry the session id into the
+    conversation so every tool call is bound to this customer.
+
+    The variables deliberately exclude the amount, the decline reason, and the
+    card: the agent must fetch those through ``get_failed_payment_details``
+    after verification, so they cannot be spoken before identity is confirmed.
+    """
+    session = _load_session(session_id)
+    customer = _load_customer(session.customer_id)
+
+    from app.providers import elevenlabs_client as provider
+
+    details: dict[str, object] = {
+        "session_id": session.session_id,
+        "customer_id": customer.customer_id,
+        "customer_name": customer.name,
+        "dynamic_variables": build_dynamic_variables(customer, session.session_id),
+        "configured": provider.is_configured(),
+        "agent_id": None,
+        "signed_url": None,
+        "mode": "unavailable",
+        "message": "",
+    }
+
+    status = provider.status()
+    if not status["configured"]:
+        details["message"] = (
+            "ElevenLabs is not configured. Set ELEVENLABS_API_KEY in .env."
+        )
+        return details
+    if not status["agent_id"]:
+        details["message"] = (
+            "No agent provisioned yet. Run scripts/provision_agent.py, then set "
+            "ELEVENLABS_AGENT_ID in .env."
+        )
+        return details
+
+    details["agent_id"] = status["agent_id"]
+    try:
+        details["signed_url"] = provider.signed_url()
+        details["mode"] = "signed_url"
+    except Exception as error:  # noqa: BLE001 - reported, never raised at the page
+        # A public agent needs no signed URL, and a transient API error should
+        # not block the demo. Either way the key stays server-side.
+        logger.warning("could not mint a signed URL: %s", type(error).__name__)
+        details["mode"] = "agent_id"
+        details["message"] = (
+            "Using the agent id directly; a signed URL was unavailable."
+        )
+    return details
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ A prompt can be argued with. These cannot.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from datetime import date, timedelta
 
@@ -70,6 +71,11 @@ MAX_SCHEDULE_DAYS_AHEAD = 60
 RETRY_LATENCY_SECONDS = 0.8
 
 CALLBACK_WINDOW = "within one business day"
+
+#: Temporary: log each verification comparison while confirming what the
+#: voice provider actually sends as `postal_code`. Never logs the expected
+#: answer. Flip to False once the provider payload is confirmed.
+VERIFY_DIAGNOSTIC_LOGGING = True
 
 #: Which decline codes cannot be fixed by trying the same card again, and
 #: what the agent should do instead.
@@ -135,9 +141,13 @@ def _resolve(session_id: str) -> tuple[Session, Customer, CustomerState]:
     return session, customer, store.get_state(session.customer_id)
 
 
-def _require_verified(state: CustomerState) -> None:
-    """Block anything that moves money or discloses figures."""
-    if not state.identity_verified:
+def _require_verified(session: Session) -> None:
+    """Block anything that moves money or discloses figures.
+
+    Reads the session, not the customer row: verification earned in one
+    conversation must not carry into the next one.
+    """
+    if not session.identity_verified:
         raise ToolError(
             403,
             "identity_not_verified",
@@ -152,6 +162,36 @@ def _require_not_settled(state: CustomerState) -> None:
             "already_paid",
             "That balance is already settled, so there's nothing left to pay.",
         )
+
+
+#: Spoken forms of digits that speech-to-text commonly produces. "oh" and a
+#: bare "o" are both how people say zero in a postal code.
+_SPOKEN_DIGITS = {
+    "zero": "0", "oh": "0", "o": "0", "nought": "0", "naught": "0",
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9",
+}
+
+
+def _normalise_answer(value: str) -> str:
+    """Reduce a stated postal code to its bare alphanumeric form.
+
+    A voice agent does not send a tidy "94107". Depending on what the caller
+    said and how the model relayed it, the same answer can arrive as
+    ``"9 4 1 0 7"``, ``"94107."``, ``"nine four one oh seven"`` or
+    ``"9-4-1-0-7"``. All of those are the same answer, so all of them are
+    normalised to ``"94107"`` before comparison.
+
+    This changes the *representation* accepted, never the answer: the
+    comparison afterwards is still exact and still constant-time, and a caller
+    who does not know the code cannot produce it. Both sides of the comparison
+    go through this function, so they are normalised identically.
+    """
+    text = value.strip().lower()
+    # Any run of non-alphanumerics becomes a single space, which keeps word
+    # boundaries intact so spoken digits can still be recognised.
+    tokens = re.sub(r"[^a-z0-9]+", " ", text).split()
+    return "".join(_SPOKEN_DIGITS.get(token, token) for token in tokens).upper()
 
 
 def _mask_email(email: str) -> str:
@@ -192,7 +232,7 @@ async def get_failed_payment_details(
     session, customer, state = _resolve(request.session_id)
     store.touch_session(session.session_id)
 
-    if not state.identity_verified:
+    if not session.identity_verified:
         store.record_event(
             session.session_id,
             customer.customer_id,
@@ -276,10 +316,14 @@ async def get_failed_payment_details(
 async def verify_identity(request: VerifyIdentityRequest) -> VerifyIdentityResponse:
     """Confirm the caller is the account holder.
 
-    Postal code is the only factor. Comparison ignores case and whitespace so
-    a transcription like "9 4 1 0 7" still matches. Attempts are capped by the
-    customer's ``max_attempts``; once spent, the tool stays locked for the
-    rest of the conversation and no further guesses are counted.
+    Postal code is the only factor, and the attempt counter lives on the
+    **session** — a caller who fails twice has used up this conversation, not
+    the account, and verification earned here does not carry into the next
+    conversation.
+
+    The stated answer is normalised before comparison (see
+    :func:`_normalise_answer`) so the spoken forms a voice agent actually
+    sends still match. The match itself stays exact.
     """
     session, customer, state = _resolve(request.session_id)
     store.touch_session(session.session_id)
@@ -287,16 +331,16 @@ async def verify_identity(request: VerifyIdentityRequest) -> VerifyIdentityRespo
     limit = customer.verification.max_attempts
 
     # Already verified: idempotent, and does not burn an attempt.
-    if state.identity_verified:
+    if session.identity_verified:
         return VerifyIdentityResponse(
             success=True,
             verified=True,
-            attempts_remaining=max(limit - state.verification_attempts, 0),
+            attempts_remaining=max(limit - session.verification_attempts, 0),
             message="Thanks, the account is already confirmed.",
             next_action=NextAction.RETRY_PAYMENT,
         )
 
-    if state.verification_attempts >= limit:
+    if session.verification_attempts >= limit:
         store.record_event(
             session.session_id,
             customer.customer_id,
@@ -315,13 +359,33 @@ async def verify_identity(request: VerifyIdentityRequest) -> VerifyIdentityRespo
             next_action=NextAction.ESCALATE,
         )
 
-    given = "".join(request.postal_code.split()).upper()
-    expected = "".join(customer.verification.expected_answer.split()).upper()
-    attempts_used = state.verification_attempts + 1
+    given = _normalise_answer(request.postal_code)
+    expected = _normalise_answer(customer.verification.expected_answer)
+    attempts_used = session.verification_attempts + 1
     matched = secrets.compare_digest(given, expected)
 
-    store.update_state(
-        customer.customer_id,
+    # --- temporary diagnostic ------------------------------------------
+    # Added while chasing a live failure where a caller stated the correct
+    # postal code and verification still failed. Logs the stated answer and
+    # the comparison result, never the expected answer. Set
+    # VERIFY_DIAGNOSTIC_LOGGING = False (or delete this block) once the
+    # provider's exact payload has been confirmed.
+    if VERIFY_DIAGNOSTIC_LOGGING:
+        logger.info(
+            "verify_identity diagnostic: session=%s customer=%s attempt=%d/%d "
+            "stated=%r normalised=%r matched=%s",
+            session.session_id,
+            customer.customer_id,
+            attempts_used,
+            limit,
+            request.postal_code,
+            given,
+            matched,
+        )
+    # -------------------------------------------------------------------
+
+    store.update_session(
+        session.session_id,
         identity_verified=matched,
         verification_attempts=attempts_used,
     )
@@ -398,7 +462,7 @@ async def retry_payment(request: RetryPaymentRequest) -> RetryPaymentResponse:
     makes a retry pointless.
     """
     session, customer, state = _resolve(request.session_id)
-    _require_verified(state)
+    _require_verified(session)
     _require_not_settled(state)
 
     if session.retry_attempts >= MAX_RETRIES_PER_SESSION:
@@ -546,7 +610,7 @@ async def schedule_retry(request: ScheduleRetryRequest) -> ScheduleRetryResponse
     account, which is exactly what it is.
     """
     session, customer, state = _resolve(request.session_id)
-    _require_verified(state)
+    _require_verified(session)
     _require_not_settled(state)
 
     today = date.today()
@@ -625,7 +689,7 @@ async def send_payment_link(
     a customer offers a new card number, which it must always refuse.
     """
     session, customer, state = _resolve(request.session_id)
-    _require_verified(state)
+    _require_verified(session)
     _require_not_settled(state)
 
     link_id, url = mock_processor.build_payment_link(customer.customer_id, request.channel)

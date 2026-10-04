@@ -374,6 +374,12 @@ class Session(RuntimeModel):
     closed: bool = False
     tool_calls: int = 0
     retry_attempts: int = 0
+    # Verification is a property of THIS conversation, never of the customer.
+    # Holding it on the customer row meant a caller who failed twice locked
+    # the account for every future call, and - worse - a caller who verified
+    # left the next session pre-verified without saying a word.
+    identity_verified: bool = False
+    verification_attempts: int = 0
     created_at: datetime = Field(default_factory=utc_now)
     last_tool_at: datetime | None = None
 
@@ -387,8 +393,6 @@ class CustomerState(RuntimeModel):
 
     customer_id: str
     status: AutopayStatus = AutopayStatus.FAILED
-    identity_verified: bool = False
-    verification_attempts: int = 0
     retry_attempts: int = 0
     do_not_call: bool = False
     disposition: Disposition | None = None
@@ -434,7 +438,15 @@ class VerifyIdentityRequest(ToolRequest):
     or anywhere else in the tool layer.
     """
 
-    postal_code: str = Field(min_length=1, max_length=16)
+    postal_code: str = Field(
+        min_length=1,
+        max_length=64,
+        description=(
+            "The postal code the customer stated, digits only where possible "
+            "(for example 94107). Spoken forms such as '9 4 1 0 7' or "
+            "'nine four one oh seven' are also accepted."
+        ),
+    )
 
 
 class RetryPaymentRequest(ToolRequest):
@@ -595,6 +607,7 @@ class EventType(str, Enum):
     DISPOSITION_LOGGED = "disposition_logged"
     DIAL_CHECK_ALLOWED = "dial_check_allowed"
     DIAL_CHECK_REFUSED = "dial_check_refused"
+    VOICE_CALL_COMPLETED = "voice_call_completed"
 
 
 class SessionEvent(RuntimeModel):

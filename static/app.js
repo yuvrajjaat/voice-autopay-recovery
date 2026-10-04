@@ -3,7 +3,12 @@
  * Plain fetch + DOM. The page talks only to /api/*; it never calls /tools/*,
  * so the tool secret stays out of the browser entirely.
  *
- * The session id is kept in localStorage so a reload (or a mid-recording
+ * The dashboard does not only watch sessions it started. A conversation
+ * begun on /voice has a session this page never heard of, so it asks
+ * /api/sessions for the newest one and adopts it. That is what lets you open
+ * the dashboard beside a live voice call and watch the timeline fill in.
+ *
+ * The session id is also kept in localStorage so a reload (or a mid-recording
  * refresh) does not lose the session you were demonstrating.
  */
 
@@ -98,7 +103,7 @@ async function loadCustomers() {
   `).join("");
 
   for (const row of document.querySelectorAll("#customer-rows tr")) {
-    row.addEventListener("click", () => selectCustomer(row.dataset.id));
+    row.addEventListener("click", () => onCustomerPicked(row.dataset.id));
   }
   if (selectedCustomer) selectCustomer(selectedCustomer);
 }
@@ -121,7 +126,43 @@ function selectCustomer(customerId) {
   $("btn-create").disabled = false;
 }
 
+async function onCustomerPicked(customerId) {
+  selectCustomer(customerId);
+  // Adopt whatever that customer is already doing, including a call started
+  // from /voice. Falls back to an empty view when they have no sessions.
+  const latest = await latestSessionFor(customerId);
+  if (latest && latest.session_id !== sessionId) {
+    setSession(latest.session_id);
+    showBanner(
+      `Following ${latest.channel} session for ${latest.customer_name}.`,
+      "info"
+    );
+    await refreshAll();
+  } else if (!latest) {
+    setSession(null);
+    clearPanels("No session for this customer yet.");
+  }
+}
+
 /* --------------------------------------------------------------- session */
+
+async function latestSessionFor(customerId) {
+  /* Newest session for one customer, or the newest overall when given null. */
+  const query = new URLSearchParams({ limit: "1" });
+  if (customerId) query.set("customer_id", customerId);
+  try {
+    const sessions = await api(`/api/sessions?${query}`);
+    return sessions.length ? sessions[0] : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function clearPanels(message) {
+  $("state").innerHTML = `<div class="kv-empty muted">${message}</div>`;
+  $("events").innerHTML = `<li class="muted">${message}</li>`;
+  $("event-count").textContent = "";
+}
 
 async function createSession() {
   if (!selectedCustomer) return;
@@ -263,7 +304,17 @@ async function refreshAll() {
 function startAutoRefresh() {
   if (timer) clearInterval(timer);
   timer = setInterval(async () => {
-    if (!$("auto-refresh").checked || !sessionId) return;
+    if (!$("auto-refresh").checked) return;
+
+    // A voice call started while this page was open creates a session the
+    // dashboard has not seen. Pick it up rather than sitting on a stale one.
+    const latest = await latestSessionFor(selectedCustomer);
+    if (latest && latest.session_id !== sessionId) {
+      setSession(latest.session_id);
+      await loadCustomers();
+    }
+
+    if (!sessionId) return;
     await refreshAll();
     $("tick").textContent = `· updated ${new Date().toLocaleTimeString()}`;
   }, 2000);
@@ -290,8 +341,32 @@ window.addEventListener("DOMContentLoaded", async () => {
   } catch (_) {
     stored = null;
   }
+
+  // Prefer the session this page was last following, but only if it still
+  // exists; otherwise adopt the newest session on the backend, whichever page
+  // created it.
+  let adopted = null;
   if (stored) {
-    setSession(stored);
+    try {
+      adopted = await api(`/api/sessions/${stored}`);
+    } catch (_) {
+      adopted = null;
+    }
+  }
+  if (!adopted) {
+    const latest = await latestSessionFor(null);
+    if (latest) {
+      adopted = latest;
+      showBanner(
+        `Following the most recent session (${latest.customer_id}, ${latest.channel}).`,
+        "info"
+      );
+    }
+  }
+
+  if (adopted) {
+    setSession(adopted.session_id);
+    selectCustomer(adopted.customer_id);
     await refreshAll();
   } else {
     setSession(null);

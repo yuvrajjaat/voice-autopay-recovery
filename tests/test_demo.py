@@ -651,12 +651,33 @@ def test_the_control_plane_makes_no_external_connections(
     assert client.post(f"/api/sessions/{session_id}/reset").status_code == 200
 
 
-def test_phase_three_modules_import_no_provider_sdk() -> None:
-    banned = ("elevenlabs", "twilio", "import requests", "import httpx", "stripe")
+def test_control_plane_never_imports_a_provider_sdk_directly() -> None:
+    """Provider code stays isolated in app/providers/.
+
+    Phase 6 lets the control plane and the page *delegate* to
+    ``app.providers.elevenlabs_client`` — that is the isolation layer working.
+    What must never appear is a direct import of the vendor SDK, which would
+    mean provider specifics had leaked out of that module.
+    """
     for module in ("app/routers/demo.py", "app/routers/pages.py", "static/app.js"):
         text = Path(module).read_text(encoding="utf-8")
-        for needle in banned:
-            assert needle not in text, f"{module} must not reference {needle}"
+        for banned in (
+            "from elevenlabs",
+            "import elevenlabs\n",
+            "twilio",
+            "import requests",
+            "import httpx",
+            "stripe",
+        ):
+            assert banned not in text, f"{module} must not {banned.strip()}"
+
+    # And the isolation is real: only the provider module touches the SDK.
+    importers = [
+        path
+        for path in Path("app").rglob("*.py")
+        if "from elevenlabs" in path.read_text(encoding="utf-8")
+    ]
+    assert importers == [Path("app/providers/elevenlabs_client.py")], importers
 
 
 def test_disposition_enum_is_still_closed(client: TestClient) -> None:
@@ -705,13 +726,202 @@ def test_dashboard_keeps_only_the_useful_controls(client: TestClient) -> None:
         assert section in page
 
 
-def test_unused_control_plane_endpoints_are_gone(client: TestClient) -> None:
-    """Nothing consumed /api/state or the session listing, so both went."""
+def test_the_unused_ledger_endpoint_is_still_gone(client: TestClient) -> None:
+    """/api/state had no consumer and stays removed.
+
+    The session listing, removed alongside it in Phase 4, has since been
+    restored: the dashboard needs it to find sessions created by /voice.
+    """
     assert client.get("/api/state").status_code == 404
-    # /api/sessions survives for POST, so a GET is method-not-allowed.
-    assert client.get("/api/sessions").status_code == 405
 
     paths = client.get("/openapi.json").json()["paths"]
     assert "/api/state" not in paths
-    assert "/api/sessions" in paths  # POST only
-    assert set(paths["/api/sessions"]) == {"post"}
+    assert set(paths["/api/sessions"]) == {"get", "post"}
+
+
+# ---------------------------------------------------------------------------
+# Session discovery
+#
+# A live voice call produced a correct session with a full event timeline, but
+# /dashboard showed "No session yet" and "No events". The dashboard and the
+# voice page are separate pages: the dashboard only ever learned a session id
+# from its own Create button, held in that page's localStorage, and Phase 4
+# had removed the only endpoint that could have told it otherwise.
+# ---------------------------------------------------------------------------
+
+
+def test_sessions_can_be_listed(client: TestClient) -> None:
+    first = new_session(client, "CUST-001")
+    second = new_session(client, "CUST-005")
+
+    listing = client.get("/api/sessions")
+    assert listing.status_code == 200
+    ids = {row["session_id"] for row in listing.json()}
+    assert ids == {first, second}
+
+
+def test_the_listing_is_newest_first(client: TestClient) -> None:
+    """The dashboard adopts row zero, so ordering is the contract."""
+    created = [new_session(client, "CUST-001") for _ in range(3)]
+    rows = client.get("/api/sessions").json()
+    assert [row["session_id"] for row in rows] == list(reversed(created))
+
+
+def test_the_listing_can_be_filtered_by_customer(client: TestClient) -> None:
+    mine = new_session(client, "CUST-001")
+    new_session(client, "CUST-005")
+
+    rows = client.get("/api/sessions?customer_id=CUST-001").json()
+    assert [row["session_id"] for row in rows] == [mine]
+    assert all(row["customer_id"] == "CUST-001" for row in rows)
+
+
+def test_the_listing_honours_a_limit(client: TestClient) -> None:
+    for _ in range(4):
+        new_session(client, "CUST-001")
+    assert len(client.get("/api/sessions?limit=1").json()) == 1
+    assert len(client.get("/api/sessions?limit=2").json()) == 2
+
+
+def test_the_listing_rejects_an_unknown_customer(client: TestClient) -> None:
+    """A typo must be distinguishable from a customer with no sessions."""
+    response = client.get("/api/sessions?customer_id=CUST-999")
+    assert response.status_code == 404
+    assert response.json()["error"] == "unknown_customer"
+
+
+def test_a_customer_with_no_sessions_lists_empty(client: TestClient) -> None:
+    new_session(client, "CUST-001")
+    assert client.get("/api/sessions?customer_id=CUST-008").json() == []
+
+
+def test_the_listing_is_empty_before_anything_happens(client: TestClient) -> None:
+    assert client.get("/api/sessions").json() == []
+
+
+def test_a_voice_session_is_discoverable_by_the_dashboard(client: TestClient) -> None:
+    """The reported bug, end to end.
+
+    A session created the way /voice creates one must be findable by the
+    lookup the dashboard performs, and its state and events must load.
+    """
+    created = client.post(
+        "/api/sessions", json={"customer_id": "CUST-001", "channel": "web"}
+    )
+    assert created.status_code == 201
+    session_id = created.json()["session_id"]
+
+    # Drive it the way the agent does, so there is a timeline to find.
+    tool(client, "verify_identity", {"session_id": session_id, "postal_code": "94107"})
+    tool(client, "get_failed_payment_details", {"session_id": session_id})
+    tool(client, "retry_payment", {"session_id": session_id})
+    tool(
+        client,
+        "log_disposition",
+        {"session_id": session_id, "disposition": "payment_recovered"},
+    )
+
+    # Exactly the request the dashboard makes on load and on each tick.
+    discovered = client.get("/api/sessions?customer_id=CUST-001&limit=1").json()
+    assert len(discovered) == 1
+    assert discovered[0]["session_id"] == session_id
+    assert discovered[0]["channel"] == "web"
+
+    # And the two follow-up calls it then makes.
+    state = client.get(f"/api/sessions/{session_id}")
+    assert state.status_code == 200
+    assert state.json()["payment_status"] == "recovered"
+    assert state.json()["identity_verified"] is True
+
+    events = client.get(f"/api/sessions/{session_id}/events")
+    assert events.status_code == 200
+    types = [event["event_type"] for event in events.json()]
+    for expected in (
+        "session_created",
+        "identity_verified",
+        "payment_details_viewed",
+        "payment_retry_attempted",
+        "payment_retry_succeeded",
+        "disposition_logged",
+    ):
+        assert expected in types, f"{expected} missing from the discovered timeline"
+
+
+def test_discovery_finds_the_newest_session_for_a_customer(client: TestClient) -> None:
+    """A second call on the same customer becomes the one to follow."""
+    older = new_session(client, "CUST-001")
+    newer = new_session(client, "CUST-001")
+
+    rows = client.get("/api/sessions?customer_id=CUST-001&limit=1").json()
+    assert rows[0]["session_id"] == newer
+    assert rows[0]["session_id"] != older
+
+
+def test_discovery_without_a_customer_returns_the_newest_overall(
+    client: TestClient,
+) -> None:
+    """What the dashboard uses on a cold load with nothing remembered."""
+    new_session(client, "CUST-001")
+    newest = new_session(client, "CUST-006")
+
+    rows = client.get("/api/sessions?limit=1").json()
+    assert rows[0]["session_id"] == newest
+    assert rows[0]["customer_id"] == "CUST-006"
+
+
+def test_a_closed_session_is_still_discoverable(client: TestClient) -> None:
+    """A finished call is exactly what you want to inspect afterwards."""
+    session_id = new_session(client, "CUST-010")
+    tool(
+        client, "log_disposition", {"session_id": session_id, "disposition": "do_not_call"}
+    )
+
+    rows = client.get("/api/sessions?customer_id=CUST-010&limit=1").json()
+    assert rows[0]["session_id"] == session_id
+    assert rows[0]["status"] == "closed"
+    assert client.get(f"/api/sessions/{session_id}/events").json()
+
+
+def test_the_listing_exposes_no_secret_or_credential(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "tool_shared_secret", SECRET)
+    new_session(client, "CUST-001")
+    text = client.get("/api/sessions").text
+
+    assert SECRET not in text
+    for forbidden in ("expected_answer", "94107", "pm_mock_", "pay_mock_"):
+        assert forbidden not in text
+
+
+def test_the_listing_is_read_only(client: TestClient) -> None:
+    """Discovery must not create anything."""
+    before = len(store.list_sessions())
+    client.get("/api/sessions")
+    client.get("/api/sessions?customer_id=CUST-001")
+    assert len(store.list_sessions()) == before
+
+
+def test_the_dashboard_script_discovers_sessions(client: TestClient) -> None:
+    """The page must actually perform the lookup, not just be able to."""
+    script = client.get("/static/app.js").text
+    assert "/api/sessions?" in script
+    assert "latestSessionFor" in script
+    assert "limit" in script
+
+
+def test_the_dashboard_script_stays_observer_only(client: TestClient) -> None:
+    """Discovery must not have turned the dashboard into a driver."""
+    script = client.get("/static/app.js").text
+    for call_syntax in ('api("/tools', "api('/tools", 'fetch("/tools'):
+        assert call_syntax not in script
+    assert "TOOL_SHARED_SECRET" not in script
+
+    # The only writes the dashboard performs remain its own session lifecycle:
+    # creating a session and resetting one. Everything else it does is a GET.
+    import re
+
+    posted_paths = re.findall(r'api\(`?([^`"\']+)`?[^)]*method: "POST"', script, re.S)
+    assert posted_paths, "expected to find the dashboard's POST calls"
+    for path in posted_paths:
+        assert path.startswith("/api/sessions"), f"unexpected POST to {path}"

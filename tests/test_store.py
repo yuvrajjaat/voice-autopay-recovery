@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from app import store
-from app.models import AutopayStatus, Disposition
+from app.models import AutopayStatus, CustomerState, Disposition
 from app.payments.mock_processor import retry_payment
 
 
@@ -63,24 +63,23 @@ def test_find_customer_by_unknown_phone_returns_none() -> None:
 def test_default_state_comes_from_the_seed_without_writing() -> None:
     state = store.get_state("CUST-001")
     assert state.status is AutopayStatus.FAILED
-    assert state.identity_verified is False
     assert state.retry_attempts == 0
     assert state.disposition is None
 
 
 def test_update_state_persists_changes() -> None:
-    updated = store.update_state("CUST-001", identity_verified=True, verification_attempts=1)
-    assert updated.identity_verified is True
-    assert updated.verification_attempts == 1
+    updated = store.update_state("CUST-001", retry_attempts=1, last_confirmation_number="C-1")
+    assert updated.retry_attempts == 1
+    assert updated.last_confirmation_number == "C-1"
 
     reread = store.get_state("CUST-001")
-    assert reread.identity_verified is True
-    assert reread.verification_attempts == 1
+    assert reread.retry_attempts == 1
+    assert reread.last_confirmation_number == "C-1"
 
 
 def test_state_survives_a_full_reload(isolated_runtime: Path) -> None:
     """Write, drop every in-memory cache, read the file back."""
-    store.update_state("CUST-004", identity_verified=True, retry_attempts=2)
+    store.update_state("CUST-004", retry_attempts=2)
 
     store._customers_cache = None  # force the seed to be re-validated
     document = json.loads(isolated_runtime.read_text(encoding="utf-8"))
@@ -92,6 +91,24 @@ def test_state_survives_a_full_reload(isolated_runtime: Path) -> None:
 def test_update_state_rejects_unknown_fields() -> None:
     with pytest.raises(ValueError, match="Unknown CustomerState field"):
         store.update_state("CUST-001", nonexistent_field=True)
+
+
+def test_verification_fields_are_no_longer_on_the_customer_row() -> None:
+    """They moved to the session; writing them here must fail loudly."""
+    assert "identity_verified" not in CustomerState.model_fields
+    assert "verification_attempts" not in CustomerState.model_fields
+    with pytest.raises(ValueError, match="Unknown CustomerState field"):
+        store.update_state("CUST-001", identity_verified=True)
+
+
+def test_update_session_persists_and_validates() -> None:
+    session_id = store.create_session("CUST-001", "sess_upd").session_id
+    updated = store.update_session(session_id, identity_verified=True, verification_attempts=1)
+    assert updated.identity_verified is True
+    assert store.get_session(session_id).verification_attempts == 1
+
+    with pytest.raises(ValueError, match="Unknown Session field"):
+        store.update_session(session_id, nonexistent_field=True)
 
 
 def test_update_state_for_unknown_customer_raises() -> None:
@@ -219,7 +236,7 @@ def test_runtime_file_is_created_on_first_use(isolated_runtime: Path) -> None:
 
 
 def test_reset_runtime_clears_all_state(isolated_runtime: Path) -> None:
-    store.update_state("CUST-001", identity_verified=True)
+    store.update_state("CUST-001", retry_attempts=1)
     store.record_payment_attempt(
         "CUST-001", retry_payment(store.get_customer("CUST-001")), attempt_number=1
     )
@@ -227,14 +244,14 @@ def test_reset_runtime_clears_all_state(isolated_runtime: Path) -> None:
 
     store.reset_runtime()
     assert store.get_payment_attempts() == []
-    assert store.get_state("CUST-001").identity_verified is False
+    assert store.get_state("CUST-001").retry_attempts == 0
     assert store.get_state("CUST-001").status is AutopayStatus.FAILED
 
 
 def test_writes_leave_no_temporary_files_behind(isolated_runtime: Path) -> None:
     """Atomic replace must not litter the data directory."""
     for index in range(5):
-        store.update_state("CUST-001", verification_attempts=index)
+        store.update_state("CUST-001", retry_attempts=index)
 
     leftovers = list(isolated_runtime.parent.glob(".runtime-*"))
     assert leftovers == [], f"temporary files left behind: {leftovers}"
@@ -243,11 +260,11 @@ def test_writes_leave_no_temporary_files_behind(isolated_runtime: Path) -> None:
 def test_sequential_writes_never_corrupt_the_file(isolated_runtime: Path) -> None:
     """Many read-modify-write cycles, then the file must still parse."""
     for index in range(25):
-        store.update_state("CUST-002", verification_attempts=index % 3)
+        store.update_state("CUST-002", retry_attempts=index % 3)
         store.update_state("CUST-003", retry_attempts=index % 2)
 
     document = json.loads(isolated_runtime.read_text(encoding="utf-8"))
-    assert document["customer_state"]["CUST-002"]["verification_attempts"] == 24 % 3
+    assert document["customer_state"]["CUST-002"]["retry_attempts"] == 24 % 3
     assert document["customer_state"]["CUST-003"]["retry_attempts"] == 24 % 2
 
 
@@ -263,7 +280,7 @@ def test_the_seed_file_is_never_modified(seed_path: Path) -> None:
     """Every write path must leave data/customers.json byte-identical."""
     before = hashlib.sha256(seed_path.read_bytes()).hexdigest()
 
-    store.update_state("CUST-001", identity_verified=True)
+    store.update_state("CUST-001", retry_attempts=1)
     store.record_payment_attempt(
         "CUST-001", retry_payment(store.get_customer("CUST-001")), attempt_number=1
     )
