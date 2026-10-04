@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from app.config import settings
+from app.dial_safety import posture
 
 router = APIRouter(tags=["dashboard"])
 
@@ -23,15 +24,16 @@ templates = Jinja2Templates(directory=str(settings.base_dir / "templates"))
 async def dashboard(request: Request) -> HTMLResponse:
     """Render the operator dashboard.
 
-    Only two flags reach the template, both status indicators the demo
-    relies on: whether the tool endpoints are usable at all, and whether
-    the dial-safety interlock is engaged. No secret value is ever passed.
+    Only status indicators reach the template: whether the tool endpoints
+    are usable at all, and the dial-safety posture. ``posture()`` returns
+    booleans and a label, never the configured number, so no secret or
+    phone number can reach the page.
     """
     return templates.TemplateResponse(
         request,
         "dashboard.html",
         {
             "tool_auth_configured": bool(settings.tool_shared_secret),
-            "outbound_calls_enabled": settings.enable_outbound_calls,
+            "dial": posture(),
         },
     )

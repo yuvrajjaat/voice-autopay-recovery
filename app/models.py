@@ -593,6 +593,8 @@ class EventType(str, Enum):
     PAYMENT_LINK_PREPARED = "payment_link_prepared"
     HUMAN_ESCALATION_CREATED = "human_escalation_created"
     DISPOSITION_LOGGED = "disposition_logged"
+    DIAL_CHECK_ALLOWED = "dial_check_allowed"
+    DIAL_CHECK_REFUSED = "dial_check_refused"
 
 
 class SessionEvent(RuntimeModel):

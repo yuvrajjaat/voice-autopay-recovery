@@ -24,10 +24,15 @@
         tool auth not configured
       </span>
     {% endif %}
-    {% if outbound_calls_enabled %}
-      <span class="pill pill-warn">outbound calls ENABLED</span>
+    {% if not dial.enabled %}
+      <span class="pill pill-ok" title="ENABLE_OUTBOUND_CALLS=false">
+        Outbound calling: {{ dial.label }}</span>
+    {% elif dial.demo_number_configured %}
+      <span class="pill pill-warn" title="Only DEMO_PHONE_NUMBER can be dialled">
+        Outbound calling: {{ dial.label }}</span>
     {% else %}
-      <span class="pill pill-ok">outbound calls disabled</span>
+      <span class="pill pill-warn" title="ENABLE_OUTBOUND_CALLS=true but DEMO_PHONE_NUMBER is unset">
+        Outbound calling: {{ dial.label }}</span>
     {% endif %}
   </div>
 </header>

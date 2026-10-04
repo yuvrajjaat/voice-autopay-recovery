@@ -27,6 +27,28 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # E.164: a leading '+', a non-zero country code, then 7-14 more digits.
 E164_PATTERN = re.compile(r"^\+[1-9]\d{7,14}$")
 
+# Formatting characters a human might type or a transcript might contain.
+_PHONE_NOISE = re.compile(r"[\s\-().]")
+
+
+def normalise_e164(value: object) -> str | None:
+    """Strip formatting and return the number in E.164, or None if invalid.
+
+    Shared by the configuration validator (which raises on a bad value) and
+    by ``app.dial_safety`` (which treats a bad value as a rejection), so both
+    agree on exactly what a valid destination looks like.
+
+    Deliberately total: anything it cannot normalise returns None rather than
+    being guessed at or repaired. Silently "fixing" a malformed destination is
+    how a call reaches the wrong person.
+    """
+    if value is None:
+        return None
+    text = _PHONE_NOISE.sub("", str(value))
+    if not text:
+        return None
+    return text if E164_PATTERN.match(text) else None
+
 
 class MissingConfigError(RuntimeError):
     """Raised when a feature is used before its configuration is supplied."""
@@ -65,7 +87,9 @@ class Settings(BaseSettings):
     demo_phone_number: str | None = None
 
     # --- Telephony identifier (Phase 9; not a credential) ------------------
-    elevenlabs_agent_phone_number_id: str | None = None
+    # Provider-neutral on purpose: the dial guard and the eventual provider
+    # adapter both refer to "the number we call from", whoever supplies it.
+    agent_phone_number_id: str | None = None
 
     # --- Optional: offline text simulator (Phase 4) ------------------------
     anthropic_api_key: str | None = None
@@ -91,21 +115,23 @@ class Settings(BaseSettings):
     @field_validator("demo_phone_number", mode="before")
     @classmethod
     def _normalise_phone(cls, value: object) -> str | None:
-        """Strip formatting, treat blanks as unset, and enforce E.164."""
-        if value is None:
+        """Treat a blank as unset; reject anything that is not E.164.
+
+        A malformed number fails startup rather than being accepted and
+        quietly rejected later, so a typo in .env is found immediately.
+        """
+        if value is None or not _PHONE_NOISE.sub("", str(value)):
             return None
-        text = re.sub(r"[\s\-().]", "", str(value))
-        if not text:
-            return None
-        if not E164_PATTERN.match(text):
+        normalised = normalise_e164(value)
+        if normalised is None:
             raise ValueError(
                 f"DEMO_PHONE_NUMBER must be E.164 (e.g. +14155550123), got {value!r}"
             )
-        return text
+        return normalised
 
     @field_validator("public_base_url", "elevenlabs_api_key", "elevenlabs_agent_id",
                      "elevenlabs_webhook_secret", "tool_shared_secret",
-                     "elevenlabs_agent_phone_number_id", "anthropic_api_key",
+                     "agent_phone_number_id", "anthropic_api_key",
                      mode="before")
     @classmethod
     def _blank_to_none(cls, value: object) -> object:
@@ -160,7 +186,7 @@ class Settings(BaseSettings):
             "tool_shared_secret": bool(self.tool_shared_secret),
             "public_base_url": bool(self.public_base_url),
             "demo_phone_number": bool(self.demo_phone_number),
-            "agent_phone_number_id": bool(self.elevenlabs_agent_phone_number_id),
+            "agent_phone_number_id": bool(self.agent_phone_number_id),
             "outbound_calls_enabled": self.enable_outbound_calls,
         }
 
