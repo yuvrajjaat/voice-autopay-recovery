@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import tempfile
 import threading
 from datetime import date
@@ -46,6 +47,7 @@ from app.models import (
     PaymentLink,
     PaymentResult,
     ScheduledRetry,
+    Session,
     utc_now,
 )
 
@@ -62,6 +64,10 @@ _customers_cache: dict[str, Customer] | None = None
 
 class CustomerNotFoundError(KeyError):
     """Raised when a customer id or phone number is not in the seed."""
+
+
+class SessionNotFoundError(KeyError):
+    """Raised when a session id has no record in runtime state."""
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +160,7 @@ def empty_runtime() -> dict[str, Any]:
     return {
         "version": RUNTIME_VERSION,
         "created_at": utc_now().isoformat(),
+        "sessions": {},
         "customer_state": {},
         "payment_attempts": [],
         "scheduled_retries": [],
@@ -306,10 +313,12 @@ def record_payment_attempt(
     customer_id: str,
     result: PaymentResult,
     attempt_number: int,
+    session_id: str | None = None,
 ) -> PaymentAttempt:
     """Log a retry and advance the customer's status to match the outcome."""
     attempt = PaymentAttempt(
         customer_id=customer_id,
+        session_id=session_id,
         attempt_number=attempt_number,
         payment_method=result.payment_method,
         status=result.status,
@@ -334,11 +343,15 @@ def record_scheduled_retry(
     customer_id: str,
     scheduled_for: date,
     confirmation_number: str,
+    session_id: str | None = None,
+    requested_action: Literal["retry_primary", "retry_backup"] = "retry_primary",
 ) -> ScheduledRetry:
     """Log a postponed retry and mark the customer as scheduled."""
     retry = ScheduledRetry(
         customer_id=customer_id,
+        session_id=session_id,
         scheduled_for=scheduled_for,
+        requested_action=requested_action,
         confirmation_number=confirmation_number,
     )
     with _lock:
@@ -357,13 +370,17 @@ def record_payment_link(
     channel: Literal["sms", "email"],
     sent_to_masked: str,
     link_id: str,
+    url: str = "",
+    session_id: str | None = None,
 ) -> PaymentLink:
     """Log an offered payment link. Nothing is actually transmitted."""
     link = PaymentLink(
         customer_id=customer_id,
+        session_id=session_id,
         channel=channel,
         sent_to_masked=sent_to_masked,
         link_id=link_id,
+        url=url or f"https://example.test/pay/{link_id}",
         delivered=False,
     )
     with _lock:
@@ -377,12 +394,16 @@ def record_escalation(
     ticket_id: str,
     reason: str,
     callback_window: str,
+    session_id: str | None = None,
+    notes: str | None = None,
 ) -> Escalation:
     """Log a handoff to a human and mark the customer as escalated."""
     escalation = Escalation(
         customer_id=customer_id,
+        session_id=session_id,
         ticket_id=ticket_id,
         reason=reason,
+        notes=notes,
         callback_window=callback_window,
     )
     with _lock:
@@ -438,3 +459,126 @@ def next_attempt_number(customer_id: str) -> int:
     the seed records as having happened before we called.
     """
     return len(get_payment_attempts(customer_id)) + 1
+
+
+# ---------------------------------------------------------------------------
+# Sessions
+#
+# A session binds one conversation to one customer. There is deliberately no
+# function here that changes an existing session's customer_id: rebinding is
+# not an operation this codebase offers, so a tool call can never be steered
+# to a different customer's data. Serving someone else means creating a new
+# session, which is an explicit act by the caller that places the call.
+# ---------------------------------------------------------------------------
+
+
+def create_session(
+    customer_id: str,
+    session_id: str | None = None,
+    channel: Literal["web", "phone", "simulator", "test"] = "test",
+) -> Session:
+    """Open a session for a customer.
+
+    ``session_id`` may be supplied to make a run reproducible (tests and
+    scripted demos do this); otherwise a random one is generated. The customer
+    id is validated against the seed first, so a session can never point at a
+    customer that does not exist.
+    """
+    get_customer(customer_id)  # raises CustomerNotFoundError on a bad id
+
+    with _lock:
+        document = load_runtime()
+        if session_id is None:
+            session_id = f"sess_{secrets.token_hex(8)}"
+        elif session_id in document["sessions"]:
+            raise ValueError(f"Session {session_id!r} already exists")
+
+        session = Session(
+            session_id=session_id,
+            customer_id=customer_id,
+            channel=channel,
+        )
+        document["sessions"][session_id] = json.loads(session.model_dump_json())
+        _write_runtime(document)
+        logger.info("session %s opened for %s (%s)", session_id, customer_id, channel)
+        return session
+
+
+def get_session(session_id: str) -> Session:
+    """One session by id, or raise ``SessionNotFoundError``."""
+    document = load_runtime()
+    stored = document["sessions"].get(session_id)
+    if stored is None:
+        raise SessionNotFoundError(f"No session with id {session_id!r}")
+    return Session.model_validate(stored)
+
+
+def _save_session(session: Session) -> Session:
+    with _lock:
+        document = load_runtime()
+        document["sessions"][session.session_id] = json.loads(session.model_dump_json())
+        _write_runtime(document)
+        return session
+
+
+def touch_session(session_id: str, *, retry: bool = False) -> Session:
+    """Record that a tool was called on this session.
+
+    ``retry=True`` also increments the per-session retry counter, which is
+    what caps retries within a single conversation.
+    """
+    with _lock:
+        session = get_session(session_id)
+        updated = session.model_copy(
+            update={
+                "tool_calls": session.tool_calls + 1,
+                "retry_attempts": session.retry_attempts + (1 if retry else 0),
+                "last_tool_at": utc_now(),
+            }
+        )
+        return _save_session(updated)
+
+
+def close_session(session_id: str) -> Session:
+    """Mark a session finished. Later tool calls on it are rejected."""
+    with _lock:
+        session = get_session(session_id)
+        return _save_session(session.model_copy(update={"closed": True}))
+
+
+def list_sessions() -> list[Session]:
+    """Every session, oldest first."""
+    document = load_runtime()
+    return [Session.model_validate(record) for record in document["sessions"].values()]
+
+
+def get_scheduled_retries(customer_id: str | None = None) -> list[dict[str, Any]]:
+    """Scheduled retry records, optionally filtered by customer."""
+    records = load_runtime()["scheduled_retries"]
+    if customer_id is None:
+        return list(records)
+    return [r for r in records if r.get("customer_id") == customer_id]
+
+
+def get_payment_links(customer_id: str | None = None) -> list[dict[str, Any]]:
+    """Payment link records, optionally filtered by customer."""
+    records = load_runtime()["payment_links"]
+    if customer_id is None:
+        return list(records)
+    return [r for r in records if r.get("customer_id") == customer_id]
+
+
+def get_escalations(customer_id: str | None = None) -> list[dict[str, Any]]:
+    """Escalation records, optionally filtered by customer."""
+    records = load_runtime()["escalations"]
+    if customer_id is None:
+        return list(records)
+    return [r for r in records if r.get("customer_id") == customer_id]
+
+
+def get_dispositions(customer_id: str | None = None) -> list[dict[str, Any]]:
+    """Disposition records, optionally filtered by customer."""
+    records = load_runtime()["dispositions"]
+    if customer_id is None:
+        return list(records)
+    return [r for r in records if r.get("customer_id") == customer_id]

@@ -113,6 +113,24 @@ def build_confirmation_number(customer_id: str, attempt_number: int, method: str
     return f"C-{digits:04d}"
 
 
+def build_payment_link(customer_id: str, channel: str) -> tuple[str, str]:
+    """Return ``(link_id, url)`` for a mock payment link.
+
+    The host is ``example.test``: ``.test`` is an IANA-reserved TLD that can
+    never resolve, so the URL is inert even if someone pastes it into a
+    browser. Nothing is transmitted — the caller records the request and the
+    agent describes the link as prepared, not sent.
+    """
+    link_id = f"link_mock_{_digest(customer_id, 0, channel)[:10]}"
+    return link_id, f"https://example.test/pay/{link_id}"
+
+
+def build_ticket_id(customer_id: str, reason: str) -> str:
+    """Deterministic escalation ticket reference, e.g. ``TCK-4F91A2``."""
+    seed = hashlib.sha256(f"{customer_id}:{reason}".encode("utf-8")).hexdigest()
+    return f"TCK-{seed[:6].upper()}"
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------

@@ -15,9 +15,17 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 
 from app import __version__
 from app.config import settings
+from app.errors import (
+    ToolError,
+    tool_error_handler,
+    unhandled_error_handler,
+    validation_error_handler,
+)
+from app.routers import tools
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level),
@@ -29,7 +37,7 @@ logger = logging.getLogger("app")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Log a readable startup banner, then hand over to the server."""
-    logger.info("%s v%s starting (phase 1 - data + mock payments)", settings.app_name, __version__)
+    logger.info("%s v%s starting (phase 2 - tool layer)", settings.app_name, __version__)
     # The dial-safety toggle is reported separately below; it is a switch, not
     # a credential, so listing it as "not configured" would read as a problem.
     ready = {
@@ -58,8 +66,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Routers are mounted in later phases:
-#   app.include_router(tools.router)     # Phase 2 — the agent's webhook tools
+# Every /tools/* failure, 422 included, is rendered as the same flat
+# envelope, because the body is read by the agent's LLM and then spoken.
+app.add_exception_handler(ToolError, tool_error_handler)
+app.add_exception_handler(RequestValidationError, validation_error_handler)
+app.add_exception_handler(Exception, unhandled_error_handler)
+
+app.include_router(tools.router)  # Phase 2 — the agent's seven tools
+
+# Routers still to come:
 #   app.include_router(demo.router)      # Phase 3 — dashboard control plane
 #   app.include_router(pages.router)     # Phase 3 — dashboard + voice page
 #   app.include_router(webhooks.router)  # Phase 7 — post-call transcripts
@@ -76,7 +91,7 @@ async def healthz() -> dict[str, Any]:
         "status": "ok",
         "service": settings.app_name,
         "version": __version__,
-        "phase": "1 - customer data + mock payment processor",
+        "phase": "2 - agent tool layer",
         "config": settings.readiness(),
     }
 

@@ -93,18 +93,44 @@ class PaymentStatus(str, Enum):
 
 
 class Disposition(str, Enum):
-    """How a conversation ended. Written once, before hangup."""
+    """How a conversation ended. Written once, before hangup.
 
-    RECOVERED = "recovered"
-    RETRY_FAILED = "retry_failed"
+    A closed set: ``log_disposition`` rejects anything outside it, so the
+    agent cannot invent an outcome label that later reporting cannot count.
+
+    The first eight are the agreed Phase 2 vocabulary. ``WRONG_NUMBER`` and
+    ``NO_ANSWER`` are added for the telephony branches of the conversation
+    flow (reached the wrong person, or voicemail), which have to be recordable
+    once Phase 9 can place a real call.
+    """
+
+    PAYMENT_RECOVERED = "payment_recovered"
+    PAYMENT_LINK_PREPARED = "payment_link_prepared"
     RETRY_SCHEDULED = "retry_scheduled"
-    LINK_SENT = "link_sent"
     ESCALATED = "escalated"
-    VERIFICATION_FAILED = "verification_failed"
+    CUSTOMER_DECLINED = "customer_declined"
     DO_NOT_CALL = "do_not_call"
-    DECLINED = "declined"
+    VERIFICATION_FAILED = "verification_failed"
+    UNRESOLVED = "unresolved"
     WRONG_NUMBER = "wrong_number"
     NO_ANSWER = "no_answer"
+
+
+class NextAction(str, Enum):
+    """What the agent should consider doing next.
+
+    Returned by tools so the conversational decision is driven by backend
+    state rather than left to the model's improvisation.
+    """
+
+    NONE = "none"
+    VERIFY_IDENTITY = "verify_identity"
+    RETRY_PAYMENT = "retry_payment"
+    OFFER_BACKUP_METHOD = "offer_backup_method"
+    PAYMENT_LINK = "payment_link"
+    SCHEDULE_RETRY = "schedule_retry"
+    ESCALATE = "escalate"
+    PAYMENT_LINK_OR_ESCALATION = "payment_link_or_escalation"
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +291,7 @@ class PaymentAttempt(RuntimeModel):
     """Audit record of one retry the agent triggered."""
 
     customer_id: str
+    session_id: str | None = None
     attempt_number: int = Field(ge=1)
     payment_method: Literal["primary", "backup"]
     status: PaymentStatus
@@ -280,11 +307,19 @@ class PaymentAttempt(RuntimeModel):
 
 
 class ScheduledRetry(RuntimeModel):
-    """A retry the customer asked us to postpone."""
+    """A retry the customer asked us to postpone.
+
+    A record only. No job runs: nothing in this project has a scheduler, and
+    the demo deliberately stops at recording the customer's instruction.
+    """
 
     customer_id: str
+    session_id: str | None = None
     scheduled_for: date
+    requested_action: Literal["retry_primary", "retry_backup"] = "retry_primary"
+    status: Literal["scheduled", "cancelled"] = "scheduled"
     confirmation_number: str
+    note: str = "Demo record only. No background job is created."
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -293,25 +328,54 @@ class PaymentLink(RuntimeModel):
 
     Nothing is transmitted. The record exists so the demo can show that the
     agent refused to take a card number by voice and offered a link instead.
+    ``delivered`` is permanently False, which is what lets the agent describe
+    the link truthfully as prepared rather than sent.
     """
 
     customer_id: str
+    session_id: str | None = None
     channel: Literal["sms", "email"]
     sent_to_masked: str
     link_id: str
+    url: str
     delivered: bool = False
     note: str = "Mock only. No SMS or email is ever sent by this project."
     created_at: datetime = Field(default_factory=utc_now)
 
 
 class Escalation(RuntimeModel):
-    """A handoff to a human agent."""
+    """A handoff to a human agent. Nobody is actually contacted."""
 
     customer_id: str
+    session_id: str | None = None
     ticket_id: str
     reason: str
+    notes: str | None = None
+    status: Literal["open"] = "open"
     callback_window: str
+    note: str = "Demo record only. No human is contacted by this project."
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class Session(RuntimeModel):
+    """One conversation, bound to exactly one customer.
+
+    The binding is set at creation and there is deliberately no operation
+    anywhere in the codebase that changes ``customer_id`` on an existing
+    session. Tool requests carry only ``session_id``, so the agent has no
+    parameter through which it could address a different customer — the
+    cross-customer disclosure risk is removed structurally rather than being
+    left to the prompt.
+    """
+
+    session_id: str
+    customer_id: str
+    channel: Literal["web", "phone", "simulator", "test"] = "test"
+    closed: bool = False
+    tool_calls: int = 0
+    retry_attempts: int = 0
+    created_at: datetime = Field(default_factory=utc_now)
+    last_tool_at: datetime | None = None
 
 
 class CustomerState(RuntimeModel):
@@ -333,3 +397,164 @@ class CustomerState(RuntimeModel):
     last_confirmation_number: str | None = None
     scheduled_for: date | None = None
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+# ---------------------------------------------------------------------------
+# Tool layer: request and response schemas
+#
+# These are the contract the voice agent sees. Three rules shape them:
+#
+# 1. Every request carries only `session_id` to identify the customer, and
+#    `extra="forbid"` rejects anything else — so a stray `customer_id` from a
+#    confused model is a validation error, never a silent customer switch.
+# 2. Responses are flat, shallow objects with short string values, because the
+#    agent reads them aloud. No nested structures to mangle in speech.
+# 3. Amounts are pre-formatted strings ("49.00"), so the model never has to
+#    decide how to pronounce a Decimal.
+# ---------------------------------------------------------------------------
+
+
+class ToolRequest(BaseModel):
+    """Base for every tool request: a session id, and nothing extra."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(min_length=1, max_length=64)
+
+
+class SessionOnlyRequest(ToolRequest):
+    """For tools that need no argument beyond the session."""
+
+
+class VerifyIdentityRequest(ToolRequest):
+    """The postal code the caller stated, to check against the account.
+
+    Postal code is the only verification factor by design. Nothing that could
+    be a real credential — card number, CVC, password, OTP — is accepted here
+    or anywhere else in the tool layer.
+    """
+
+    postal_code: str = Field(min_length=1, max_length=16)
+
+
+class RetryPaymentRequest(ToolRequest):
+    payment_method: Literal["primary", "backup"] = "primary"
+
+
+class ScheduleRetryRequest(ToolRequest):
+    requested_date: date
+    requested_action: Literal["retry_primary", "retry_backup"] = "retry_primary"
+
+
+class SendPaymentLinkRequest(ToolRequest):
+    channel: Literal["sms", "email"] = "email"
+
+
+class EscalateRequest(ToolRequest):
+    reason: str = Field(min_length=1, max_length=280)
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class LogDispositionRequest(ToolRequest):
+    disposition: Disposition
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class ToolResponse(BaseModel):
+    """Base for every tool response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    success: bool
+    message: str
+
+
+class FailedPaymentDetailsResponse(ToolResponse):
+    """What the agent needs to explain the failure — and nothing more.
+
+    Deliberately absent: ``payment_method_id``, ``payment_id``, card brand,
+    expiry, and last-4 as separate fields. ``card_description`` carries the
+    one phrase the agent actually has to say out loud.
+
+    Amounts are withheld until ``verified`` is true. That rule lives here in
+    the backend, not only in the system prompt, so it holds even if the model
+    is talked into asking early.
+    """
+
+    verified: bool
+    customer_id: str
+    customer_name: str
+    status: str
+    amount: str | None = None
+    currency: str | None = None
+    due_date: str | None = None
+    days_delinquent: int | None = None
+    failure_reason: str | None = None
+    failure_explanation: str | None = None
+    card_description: str | None = None
+    retry_worth_attempting: bool | None = None
+    backup_method_available: bool | None = None
+    service_suspension_date: str | None = None
+    next_action: NextAction
+
+
+class VerifyIdentityResponse(ToolResponse):
+    verified: bool
+    attempts_remaining: int
+    locked: bool = False
+    next_action: NextAction
+
+
+class RetryPaymentResponse(ToolResponse):
+    status: str
+    transaction_id: str | None = None
+    confirmation_number: str | None = None
+    amount: str | None = None
+    currency: str | None = None
+    failure_reason: str | None = None
+    next_action: NextAction
+
+
+class ScheduleRetryResponse(ToolResponse):
+    status: str
+    scheduled_for: str
+    confirmation_number: str
+    next_action: NextAction
+
+
+class SendPaymentLinkResponse(ToolResponse):
+    link: str
+    channel: str
+    sent_to_masked: str
+    delivered: bool = False
+    delivery_note: str
+    next_action: NextAction
+
+
+class EscalationResponse(ToolResponse):
+    status: str
+    ticket_id: str
+    callback_window: str
+    next_action: NextAction
+
+
+class DispositionResponse(ToolResponse):
+    disposition: Disposition
+    do_not_call: bool
+    session_closed: bool
+    next_action: NextAction
+
+
+class ToolErrorResponse(BaseModel):
+    """Uniform error envelope for every /tools/* failure.
+
+    ``error`` is a stable machine code for the dashboard and tests;
+    ``message`` is a short sentence the agent can say without rephrasing.
+    Stack traces and internal detail never appear in either.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    success: Literal[False] = False
+    error: str
+    message: str
