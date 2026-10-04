@@ -1,0 +1,16 @@
+==================================================================
+Scenario: CUST-010 - Do not call
+==================================================================
+
+(Honoured immediately. No verification, no retry, no persuasion.)
+
+Agent: Hello, this is Ava, an automated assistant calling on behalf of Northwind Services about a recent automatic payment on your account. Before I can go into any details I'll need to confirm whether I'm speaking with Sam Okafor - is now a good time?
+Customer: No. Take me off your list and don't call again.
+Agent: Understood - I've recorded that and we won't call you again. Sorry to have bothered you.
+  Tool: log_disposition(disposition=do_not_call, notes=customer asked not to be called)
+  Result: disposition=do_not_call do_not_call=true
+Agent: Thanks for your time today. Goodbye.
+
+------------------------------------------------------------------
+Disposition: do_not_call   expected: do_not_call   OK
+Tools called: log_disposition

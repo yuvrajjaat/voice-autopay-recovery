@@ -162,14 +162,6 @@ def test_session_state_becomes_closed_after_a_disposition(client: TestClient) ->
     assert body["do_not_call"] is True
 
 
-def test_session_listing_includes_created_sessions(client: TestClient) -> None:
-    new_session(client, "CUST-001")
-    new_session(client, "CUST-002")
-    listing = client.get("/api/sessions").json()
-    assert len(listing) == 2
-    assert {row["customer_id"] for row in listing} == {"CUST-001", "CUST-002"}
-
-
 # ---------------------------------------------------------------------------
 # Customer endpoints
 # ---------------------------------------------------------------------------
@@ -253,7 +245,6 @@ def test_customer_endpoints_expose_no_internal_identifiers(client: TestClient) -
 def test_customer_endpoints_never_expose_the_tool_secret(client: TestClient) -> None:
     assert SECRET not in client.get("/api/customers").text
     assert SECRET not in client.get("/api/customers/CUST-001").text
-    assert SECRET not in client.get("/api/state").text
 
 
 def test_customer_listing_reflects_the_live_ledger(client: TestClient) -> None:
@@ -514,10 +505,9 @@ def test_dashboard_assets_load(client: TestClient) -> None:
 def test_dashboard_assets_contain_no_secret_and_no_tool_calls(client: TestClient) -> None:
     js = client.get("/static/app.js").text
     assert SECRET not in js
-    # The only /tools/ mention is inside the copy-pasteable curl helper, which
-    # prints an environment-variable name rather than a value.
-    assert "fetch(\"/tools" not in js
-    assert "$env:TOOL_SHARED_SECRET" in js
+    assert "TOOL_SHARED_SECRET" not in js
+    for call_syntax in ('api("/tools', "api('/tools", 'fetch("/tools', "fetch('/tools"):
+        assert call_syntax not in js, "the browser must never call a tool endpoint"
 
 
 def test_root_points_at_the_dashboard(client: TestClient) -> None:
@@ -624,19 +614,6 @@ def test_payment_link_flow_through_the_control_plane(client: TestClient) -> None
     assert state["disposition"] == "payment_link_prepared"
 
 
-def test_ledger_overview_counts_outcomes(client: TestClient) -> None:
-    first = new_session(client, "CUST-001")
-    tool(client, "verify_identity", {"session_id": first, "postal_code": "94107"})
-    tool(client, "retry_payment", {"session_id": first})
-
-    overview = client.get("/api/state").json()
-    assert overview["customers"] == 10
-    assert overview["recovered"] == 1
-    assert overview["sessions"] == 1
-    assert overview["payment_attempts"] == 1
-    assert overview["events"] >= 3
-
-
 # ---------------------------------------------------------------------------
 # Offline guarantee
 # ---------------------------------------------------------------------------
@@ -671,7 +648,6 @@ def test_the_control_plane_makes_no_external_connections(
     assert client.get("/api/customers/CUST-005").status_code == 200
     assert client.get(f"/api/sessions/{session_id}").status_code == 200
     assert client.get(f"/api/sessions/{session_id}/events").status_code == 200
-    assert client.get("/api/state").status_code == 200
     assert client.post(f"/api/sessions/{session_id}/reset").status_code == 200
 
 
@@ -691,3 +667,51 @@ def test_disposition_enum_is_still_closed(client: TestClient) -> None:
     )
     assert response.status_code == 422
     assert set(Disposition) and AutopayStatus.RECOVERED.value == "recovered"
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 UI reduction
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_has_no_version_label(client: TestClient) -> None:
+    """A template version badge carries no demo value and was removed."""
+    page = client.get("/dashboard").text
+    assert "v0.1.0" not in page
+    assert "{{ version }}" not in page
+
+
+def test_dashboard_has_a_single_refresh_control(client: TestClient) -> None:
+    """Two refresh buttons were redundant beside auto-refresh."""
+    page = client.get("/dashboard").text
+    assert 'id="btn-refresh"' in page
+    assert "btn-refresh-state" not in page
+    assert "btn-refresh-events" not in page
+
+
+def test_dashboard_has_no_developer_curl_panel(client: TestClient) -> None:
+    """Driving flows is the simulator's job, not the demo console's."""
+    page = client.get("/dashboard").text
+    assert "Drive a flow" not in page
+    assert 'id="curl"' not in page
+    assert "curl -s -X POST" not in page
+
+
+def test_dashboard_keeps_only_the_useful_controls(client: TestClient) -> None:
+    page = client.get("/dashboard").text
+    for kept in ("btn-create", "btn-refresh", "btn-reset", "auto-refresh"):
+        assert f'id="{kept}"' in page, f"{kept} should have been kept"
+    for section in ("Choose a customer", "Session", "Event timeline"):
+        assert section in page
+
+
+def test_unused_control_plane_endpoints_are_gone(client: TestClient) -> None:
+    """Nothing consumed /api/state or the session listing, so both went."""
+    assert client.get("/api/state").status_code == 404
+    # /api/sessions survives for POST, so a GET is method-not-allowed.
+    assert client.get("/api/sessions").status_code == 405
+
+    paths = client.get("/openapi.json").json()["paths"]
+    assert "/api/state" not in paths
+    assert "/api/sessions" in paths  # POST only
+    assert set(paths["/api/sessions"]) == {"post"}

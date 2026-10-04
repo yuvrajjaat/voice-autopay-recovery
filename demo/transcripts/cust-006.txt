@@ -1,0 +1,31 @@
+==================================================================
+Scenario: CUST-006 - Closed account, escalated
+==================================================================
+
+(Unrecoverable by any retry, so the backend routes to a human.)
+
+Agent: Hello, this is Ava, an automated assistant calling on behalf of Northwind Services about a recent automatic payment on your account. Before I can go into any details I'll need to confirm whether I'm speaking with Tomas Varga - is now a good time?
+Customer: Yes, now's fine. What's this about?
+Agent: An automatic payment on your account didn't go through. Before I say anything more, can you confirm the postal code on the account?
+Customer: It's 55401.
+  Tool: verify_identity(postal_code=55401)
+  Result: verified=true attempts_remaining=1 locked=false
+Agent: Thank you, that matches.
+  Tool: get_failed_payment_details()
+  Result: 99.00 USD failed (closed_account) retry_worth_attempting=false next_action=escalate
+Agent: Your automatic payment of $99.00 due 2026-09-20 didn't go through - the bank reported the account behind the card is closed. Your service is still active.
+Agent: Would you like me to try that card again now?
+Customer: Yes, please try it again.
+  Tool: retry_payment(payment_method=primary)
+  Result: status=not_attempted reason=closed_account next_action=escalate
+Agent: That can't be fixed from my side, so I'd rather a colleague looked at it.
+  Tool: escalate_to_human(reason=retry is not possible on the card on file, notes=None)
+  Result: ticket=TCK-C7AA73 callback=within one business day
+Agent: I've passed this to a colleague - your reference is TCK-C7AA73, and someone will call you back within one business day.
+  Tool: log_disposition(disposition=escalated, notes=retry is not possible on the card on file)
+  Result: disposition=escalated do_not_call=false
+Agent: Thanks for your time today. Goodbye.
+
+------------------------------------------------------------------
+Disposition: escalated   expected: escalated   OK
+Tools called: verify_identity, get_failed_payment_details, retry_payment, escalate_to_human, log_disposition

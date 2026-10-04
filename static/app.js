@@ -151,10 +151,8 @@ function setSession(id) {
   const hasSession = Boolean(id);
   $("session-id-box").hidden = !hasSession;
   $("session-id").textContent = id || "";
-  $("btn-refresh-state").disabled = !hasSession;
-  $("btn-refresh-events").disabled = !hasSession;
+  $("btn-refresh").disabled = !hasSession;
   $("btn-reset").disabled = !hasSession;
-  renderCurl();
 }
 
 async function refreshState() {
@@ -260,34 +258,6 @@ async function refreshAll() {
   await refreshEvents();
 }
 
-/* ------------------------------------------------------- the curl helper */
-
-function renderCurl() {
-  if (!sessionId) {
-    $("curl").textContent = "Create a session to see the commands.";
-    return;
-  }
-  const tool = (name, body) =>
-    `curl -s -X POST http://127.0.0.1:8000/tools/${name} \\\n` +
-    `  -H "X-Tool-Secret: $env:TOOL_SHARED_SECRET" \\\n` +
-    `  -H "Content-Type: application/json" \\\n` +
-    `  -d '${JSON.stringify({ session_id: sessionId, ...body })}'`;
-
-  $("curl").textContent = [
-    "# 1. the agent looks up the failure (figures withheld until verified)",
-    tool("get_failed_payment_details", {}),
-    "",
-    "# 2. confirm the postal code (read it from data/customers.json)",
-    tool("verify_identity", { postal_code: "XXXXX" }),
-    "",
-    "# 3. retry the charge through the mock processor",
-    tool("retry_payment", { payment_method: "primary" }),
-    "",
-    "# 4. close the call",
-    tool("log_disposition", { disposition: "payment_recovered" }),
-  ].join("\n");
-}
-
 /* ----------------------------------------------------------------- setup */
 
 function startAutoRefresh() {
@@ -301,8 +271,7 @@ function startAutoRefresh() {
 
 window.addEventListener("DOMContentLoaded", async () => {
   $("btn-create").addEventListener("click", createSession);
-  $("btn-refresh-state").addEventListener("click", refreshState);
-  $("btn-refresh-events").addEventListener("click", refreshEvents);
+  $("btn-refresh").addEventListener("click", refreshAll);
   $("btn-reset").addEventListener("click", resetSession);
   $("btn-copy").addEventListener("click", async () => {
     try {

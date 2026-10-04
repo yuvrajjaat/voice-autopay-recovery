@@ -29,7 +29,6 @@ from fastapi import APIRouter
 from app import store
 from app.errors import ToolError
 from app.models import (
-    AutopayStatus,
     CreateSessionRequest,
     CreateSessionResponse,
     Customer,
@@ -291,47 +290,3 @@ async def get_customer(customer_id: str) -> CustomerDetail:
             "verification_attempts_allowed": customer.verification.max_attempts,
         }
     )
-
-
-@router.get(
-    "/sessions",
-    response_model=list[CreateSessionResponse],
-    summary="Every session in the current runtime state",
-)
-async def list_sessions() -> list[CreateSessionResponse]:
-    """Handy when a dashboard reload has lost track of the session id."""
-    customers = store.load_customers()
-    return [
-        CreateSessionResponse(
-            session_id=session.session_id,
-            customer_id=session.customer_id,
-            customer_name=customers[session.customer_id].name
-            if session.customer_id in customers
-            else session.customer_id,
-            status=_status_of(session),
-            channel=session.channel,
-            created_at=session.created_at,
-        )
-        for session in sorted(store.list_sessions(), key=lambda s: s.created_at)
-    ]
-
-
-@router.get("/state", summary="The whole ledger, for the dashboard overview")
-async def ledger() -> dict[str, object]:
-    """One call the dashboard can poll for the ten-row status table."""
-    states = store.all_states()
-    counts: dict[str, int] = {}
-    for state in states.values():
-        counts[state.status.value] = counts.get(state.status.value, 0) + 1
-
-    return {
-        "customers": len(states),
-        "status_counts": counts,
-        "recovered": counts.get(AutopayStatus.RECOVERED.value, 0),
-        "sessions": len(store.list_sessions()),
-        "payment_attempts": len(store.get_payment_attempts()),
-        "scheduled_retries": len(store.get_scheduled_retries()),
-        "payment_links_prepared": len(store.get_payment_links()),
-        "escalations": len(store.get_escalations()),
-        "events": len(store.get_events()),
-    }

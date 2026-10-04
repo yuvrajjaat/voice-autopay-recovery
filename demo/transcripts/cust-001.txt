@@ -1,0 +1,28 @@
+==================================================================
+Scenario: CUST-001 - Successful recovery
+==================================================================
+
+(The headline path: verify, explain, agree, retry, approved.)
+
+Agent: Hello, this is Ava, an automated assistant calling on behalf of Northwind Services about a recent automatic payment on your account. Before I can go into any details I'll need to confirm whether I'm speaking with Maya Thompson - is now a good time?
+Customer: Yes, now's fine. What's this about?
+Agent: An automatic payment on your account didn't go through. Before I say anything more, can you confirm the postal code on the account?
+Customer: It's 94107.
+  Tool: verify_identity(postal_code=94107)
+  Result: verified=true attempts_remaining=1 locked=false
+Agent: Thank you, that matches.
+  Tool: get_failed_payment_details()
+  Result: 49.00 USD failed (insufficient_funds) retry_worth_attempting=true next_action=retry_payment
+Agent: Your automatic payment of $49.00 due 2026-09-28 didn't go through - the card was declined for insufficient funds. Your service is still active.
+Agent: Would you like me to try that card again now?
+Customer: Yes, please try it again.
+  Tool: retry_payment(payment_method=primary)
+  Result: status=paid confirmation=C-0254 next_action=none
+Agent: That's gone through. $49.00 is paid, and your confirmation number is C-0254.
+  Tool: log_disposition(disposition=payment_recovered, notes=recovered on the first retry)
+  Result: disposition=payment_recovered do_not_call=false
+Agent: Thanks for your time today. Goodbye.
+
+------------------------------------------------------------------
+Disposition: payment_recovered   expected: payment_recovered   OK
+Tools called: verify_identity, get_failed_payment_details, retry_payment, log_disposition

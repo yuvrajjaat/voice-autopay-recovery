@@ -1,0 +1,26 @@
+==================================================================
+Scenario: CUST-005 - Customer declines help
+==================================================================
+
+(This card would have worked - the agent still takes no for an answer.)
+
+Agent: Hello, this is Ava, an automated assistant calling on behalf of Northwind Services about a recent automatic payment on your account. Before I can go into any details I'll need to confirm whether I'm speaking with Aisha Noor - is now a good time?
+Customer: Yes, now's fine. What's this about?
+Agent: An automatic payment on your account didn't go through. Before I say anything more, can you confirm the postal code on the account?
+Customer: It's 30309.
+  Tool: verify_identity(postal_code=30309)
+  Result: verified=true attempts_remaining=1 locked=false
+Agent: Thank you, that matches.
+  Tool: get_failed_payment_details()
+  Result: 75.50 USD failed (processor_network_error) retry_worth_attempting=true next_action=retry_payment
+Agent: Your automatic payment of $75.50 due 2026-10-02 didn't go through - a temporary network problem at the payment processor stopped it going through. Your service is still active.
+Agent: Would you like me to try that card again now?
+Customer: No thanks, I'll deal with it myself online.
+Agent: That's absolutely fine - it'll stay on the account for you.
+  Tool: log_disposition(disposition=customer_declined, notes=customer will self-serve)
+  Result: disposition=customer_declined do_not_call=false
+Agent: Thanks for your time today. Goodbye.
+
+------------------------------------------------------------------
+Disposition: customer_declined   expected: customer_declined   OK
+Tools called: verify_identity, get_failed_payment_details, log_disposition

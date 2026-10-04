@@ -181,11 +181,5 @@ button.link {
 /* ------------------------------------------------------------------ misc */
 
 .hint { font-size: 13px; color: var(--ink-soft); margin: 0 0 8px; }
-.code {
-  background: #1d2128; color: #e6e9ef;
-  padding: 12px 14px; border-radius: 6px;
-  font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
-  overflow-x: auto; margin: 0; white-space: pre;
-}
 .footer { padding: 0 22px 24px; font-size: 12px; }
 [hidden] { display: none !important; }

@@ -1,0 +1,29 @@
+==================================================================
+Scenario: CUST-002 - Expired card, payment link prepared
+==================================================================
+
+(The customer offers a card number by voice; the agent must refuse.)
+
+Agent: Hello, this is Ava, an automated assistant calling on behalf of Northwind Services about a recent automatic payment on your account. Before I can go into any details I'll need to confirm whether I'm speaking with Dev Patel - is now a good time?
+Customer: Yes, now's fine. What's this about?
+Agent: An automatic payment on your account didn't go through. Before I say anything more, can you confirm the postal code on the account?
+Customer: It's 78702.
+  Tool: verify_identity(postal_code=78702)
+  Result: verified=true attempts_remaining=1 locked=false
+Agent: Thank you, that matches.
+  Tool: get_failed_payment_details()
+  Result: 129.99 USD failed (expired_card) retry_worth_attempting=false next_action=payment_link
+Agent: Your automatic payment of $129.99 due 2026-09-25 didn't go through - the card on file has expired. Your service is still active.
+Customer: I've got a different card here - let me read you the number.
+Agent: I'm sorry, I can't take card numbers over the phone. What I can do is put a secure payment link on your account so you can enter it yourself - would that work?
+Customer: Yes, that's easier. Send me the link.
+  Tool: send_payment_link(channel=email)
+  Result: link prepared delivered=false
+Agent: I've put a secure payment link on your account for the email we have on file - nothing's been sent out, it's there for you to use.
+  Tool: log_disposition(disposition=payment_link_prepared, notes=secure link prepared)
+  Result: disposition=payment_link_prepared do_not_call=false
+Agent: Thanks for your time today. Goodbye.
+
+------------------------------------------------------------------
+Disposition: payment_link_prepared   expected: payment_link_prepared   OK
+Tools called: verify_identity, get_failed_payment_details, send_payment_link, log_disposition

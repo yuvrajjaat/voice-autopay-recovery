@@ -1,0 +1,30 @@
+==================================================================
+Scenario: CUST-009 - Retry declines again
+==================================================================
+
+(Third failure in a fortnight; no pressure applied, no false claim made.)
+
+Agent: Hello, this is Ava, an automated assistant calling on behalf of Northwind Services about a recent automatic payment on your account. Before I can go into any details I'll need to confirm whether I'm speaking with Priya Raman - is now a good time?
+Customer: Yes, now's fine. What's this about?
+Agent: An automatic payment on your account didn't go through. Before I say anything more, can you confirm the postal code on the account?
+Customer: It's 85004.
+  Tool: verify_identity(postal_code=85004)
+  Result: verified=true attempts_remaining=1 locked=false
+Agent: Thank you, that matches.
+  Tool: get_failed_payment_details()
+  Result: 12.99 USD failed (insufficient_funds) retry_worth_attempting=true next_action=retry_payment
+Agent: Your automatic payment of $12.99 due 2026-09-20 didn't go through - the card was declined for insufficient funds. Your service is still active.
+Agent: Would you like me to try that card again now?
+Customer: Yes, please try it again.
+  Tool: retry_payment(payment_method=primary)
+  Result: status=declined reason=insufficient_funds next_action=payment_link_or_escalation
+Agent: That didn't go through either. I can put a payment link on the account, or make a note to try again another day - which would you prefer?
+Customer: Neither right now. I'll sort it out myself.
+Agent: That's no problem at all.
+  Tool: log_disposition(disposition=unresolved, notes=retry declined; customer will self-serve)
+  Result: disposition=unresolved do_not_call=false
+Agent: Thanks for your time today. Goodbye.
+
+------------------------------------------------------------------
+Disposition: unresolved   expected: unresolved   OK
+Tools called: verify_identity, get_failed_payment_details, retry_payment, log_disposition

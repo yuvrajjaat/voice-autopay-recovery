@@ -1,0 +1,28 @@
+==================================================================
+Scenario: CUST-008 - Customer disputes the charge
+==================================================================
+
+(The agent does not defend the charge and does not retry it.)
+
+Agent: Hello, this is Ava, an automated assistant calling on behalf of Northwind Services about a recent automatic payment on your account. Before I can go into any details I'll need to confirm whether I'm speaking with Henry Walsh - is now a good time?
+Customer: Yes, now's fine. What's this about?
+Agent: An automatic payment on your account didn't go through. Before I say anything more, can you confirm the postal code on the account?
+Customer: It's 98104.
+  Tool: verify_identity(postal_code=98104)
+  Result: verified=true attempts_remaining=1 locked=false
+Agent: Thank you, that matches.
+  Tool: get_failed_payment_details()
+  Result: 410.00 USD failed (do_not_honor) retry_worth_attempting=true next_action=retry_payment
+Agent: Your automatic payment of $410.00 due 2026-09-27 didn't go through - the bank declined the charge without giving a reason. Your service is still active.
+Customer: That amount is wrong - I cancelled two of those lines back in August. I'm not paying it.
+Agent: I understand, and I won't try the payment while that's in question.
+  Tool: escalate_to_human(reason=customer disputes the amount, notes=says two lines were cancelled in August)
+  Result: ticket=TCK-9D9E1D callback=within one business day
+Agent: I've passed this to a colleague - your reference is TCK-9D9E1D, and someone will call you back within one business day.
+  Tool: log_disposition(disposition=escalated, notes=customer disputes the amount)
+  Result: disposition=escalated do_not_call=false
+Agent: Thanks for your time today. Goodbye.
+
+------------------------------------------------------------------
+Disposition: escalated   expected: escalated   OK
+Tools called: verify_identity, get_failed_payment_details, escalate_to_human, log_disposition

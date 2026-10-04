@@ -1,0 +1,29 @@
+==================================================================
+Scenario: CUST-007 - Identity verification fails
+==================================================================
+
+(Nothing about the account is disclosed; escalation is still offered.)
+
+Agent: Hello, this is Ava, an automated assistant calling on behalf of Northwind Services about a recent automatic payment on your account. Before I can go into any details I'll need to confirm whether I'm speaking with Grace Oyelaran - is now a good time?
+Customer: Yes, now's fine. What's this about?
+Agent: An automatic payment on your account didn't go through. Before I say anything more, can you confirm the postal code on the account?
+Customer: It's 19147.
+  Tool: verify_identity(postal_code=19147)
+  Result: verified=false attempts_remaining=1 locked=false
+Agent: That doesn't match what I have. Could you try once more?
+Customer: It's 19147.
+  Tool: verify_identity(postal_code=19147)
+  Result: verified=false attempts_remaining=0 locked=true
+Agent: I'm sorry, I can't confirm the account, so I'm not able to discuss it on this call. Please use the number on your statement.
+Agent: I can also have a colleague call you back about this, if that helps.
+Customer: Yes, do that.
+  Tool: escalate_to_human(reason=identity could not be verified on the call, notes=caller could not confirm the postal code on the account)
+  Result: ticket=TCK-25279B callback=within one business day
+Agent: I've made a note for a colleague to get in touch. Sorry about that.
+  Tool: log_disposition(disposition=verification_failed, notes=postal code did not match)
+  Result: disposition=verification_failed do_not_call=false
+Agent: Thanks for your time today. Goodbye.
+
+------------------------------------------------------------------
+Disposition: verification_failed   expected: verification_failed   OK
+Tools called: verify_identity, verify_identity, escalate_to_human, log_disposition

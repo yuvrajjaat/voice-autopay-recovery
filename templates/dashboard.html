@@ -17,7 +17,6 @@
     </p>
   </div>
   <div class="badges">
-    <span class="pill pill-neutral">v{{ version }}</span>
     {% if tool_auth_configured %}
       <span class="pill pill-ok" title="TOOL_SHARED_SECRET is set">tool auth ready</span>
     {% else %}
@@ -70,8 +69,7 @@
 
     <div class="controls">
       <button id="btn-create" class="primary" disabled>Create session</button>
-      <button id="btn-refresh-state" disabled>Refresh state</button>
-      <button id="btn-refresh-events" disabled>Refresh events</button>
+      <button id="btn-refresh" disabled>Refresh</button>
       <button id="btn-reset" class="danger" disabled>Reset session</button>
     </div>
 
@@ -101,18 +99,6 @@
     <ol id="events" class="events">
       <li class="muted">No events yet.</li>
     </ol>
-  </section>
-
-  <!-- -------------------------------------------------- driving a flow --- -->
-  <section class="panel panel-wide">
-    <div class="panel-head"><h2>Drive a flow</h2></div>
-    <p class="hint">
-      This dashboard observes; it does not call the tools. That keeps
-      <code>TOOL_SHARED_SECRET</code> out of the browser — from Phase&nbsp;6 the
-      voice agent drives these same endpoints while you watch this page. Until
-      then, drive them from a terminal:
-    </p>
-    <pre id="curl" class="code">Create a session to see the commands.</pre>
   </section>
 
 </main>
