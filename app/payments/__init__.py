@@ -1,1 +1,1 @@
-"""Placeholder package — populated in a later phase."""
+"""The mock payment processor."""

@@ -1,8 +1,9 @@
 """The voice agent's system prompt and opening line.
 
 This module is the agent's *instructions*. It contains no provider code: the
-same text is handed to ElevenLabs in Phase 6 and is the specification the
-offline simulator in ``scripts/simulate.py`` implements deterministically.
+same text is handed to ElevenLabs by the provisioning script, and it is the
+specification the offline simulator in ``scripts/simulate.py`` implements
+deterministically.
 
 A note on where rules live
 --------------------------

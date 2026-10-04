@@ -301,8 +301,8 @@ def test_a_model_supplied_number_is_refused(dialling_enabled: None) -> None:
     """Anything arriving from outside is checked against the one value."""
     for hostile in (
         "+12025550111",
-        "+442071234567",
-        "+919876543210",
+        "+13035550144",
+        "+16175550155",
         DEMO_NUMBER[:-1] + "9",
     ):
         assert check_dial_allowed(hostile).allowed is False, hostile

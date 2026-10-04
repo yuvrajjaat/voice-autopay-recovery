@@ -1258,17 +1258,28 @@ def test_verification_attempts_are_counted_after_comparison_not_before(
     assert store.get_session(session_id).verification_attempts == 1
 
 
-def test_the_diagnostic_log_never_records_the_expected_answer(
+def test_verification_logs_the_outcome_but_no_postal_code(
     client: TestClient, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The temporary logging must not leak the credential it checks."""
-    session_id = open_session("CUST-001")
-    with caplog.at_level("INFO", logger="app.routers.tools"):
-        call(
-            client, "verify_identity", {"session_id": session_id, "postal_code": "00000"}
-        )
+    """Logs are useful for debugging and must still carry no credential.
 
-    assert "verify_identity diagnostic" in caplog.text
-    assert "matched=False" in caplog.text
-    assert "CUST-001" in caplog.text
-    assert "94107" not in caplog.text, "the expected answer must never be logged"
+    Neither the expected answer nor the caller's stated one may appear, in
+    either the matched or the unmatched case.
+    """
+    cases = (("00000", "matched=False"), ("94107", "matched=True"))
+    for index, (code, expect) in enumerate(cases):
+        caplog.clear()
+        # The session id must not embed the code, or this test would find its
+        # own fixture in the log and report a leak that is not there.
+        session_id = open_session("CUST-001", f"sess_log_case{index}")
+        with caplog.at_level("INFO", logger="app.routers.tools"):
+            call(
+                client,
+                "verify_identity",
+                {"session_id": session_id, "postal_code": code},
+            )
+
+        assert expect in caplog.text
+        assert "CUST-001" in caplog.text
+        assert "94107" not in caplog.text, "the expected answer must never be logged"
+        assert "00000" not in caplog.text, "the stated answer must never be logged"

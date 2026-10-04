@@ -3,9 +3,8 @@
 Run with:
     .venv\\Scripts\\python.exe -m uvicorn app.main:app --reload --port 8000
 
-Phase 0 is the skeleton: configuration, the app object, and a health endpoint.
-Routers for the agent's tools, the dashboard, and the post-call webhook are
-mounted here in later phases.
+Wires together the agent's tool endpoints, the dashboard control plane, the
+two pages, and the post-call webhook.
 """
 
 from __future__ import annotations
@@ -75,10 +74,10 @@ app.add_exception_handler(ToolError, tool_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.add_exception_handler(Exception, unhandled_error_handler)
 
-app.include_router(tools.router)  # Phase 2 — the agent's seven tools
-app.include_router(demo.router)  # Phase 3 — local demo control plane
-app.include_router(pages.router)  # Phase 3 — the dashboard page
-app.include_router(webhooks.router)  # Phase 6 — post-call metadata
+app.include_router(tools.router)  # the agent's seven tools
+app.include_router(demo.router)  # local demo control plane
+app.include_router(pages.router)  # the dashboard and voice pages
+app.include_router(webhooks.router)  # post-call metadata
 
 # Dashboard assets. Mounted from an absolute path so the server can be
 # started from any working directory.

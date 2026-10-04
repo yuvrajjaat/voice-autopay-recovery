@@ -1,1 +1,1 @@
-"""Placeholder package — populated in a later phase."""
+"""HTTP routers."""

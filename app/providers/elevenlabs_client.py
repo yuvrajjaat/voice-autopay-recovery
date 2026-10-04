@@ -20,7 +20,7 @@ The one design point worth reading
 (``LiteralJsonSchemaProperty(dynamic_variable="session_id")``), not an
 LLM-filled parameter. ElevenLabs substitutes it from the conversation's
 dynamic variables, so the model has no parameter through which it could aim a
-tool call at a different customer's account. That is the Phase 2 session
+tool call at a different customer's account. That is the backend's session
 binding carried intact into the provider.
 """
 

@@ -201,7 +201,6 @@ def retry_payment(
         customer.customer_id, attempt_number, payment_method
     )
 
-    # Decide approve vs decline, deterministically.
     if outcome is MockRetryOutcome.SUCCEED:
         approved = True
         failure_code = None

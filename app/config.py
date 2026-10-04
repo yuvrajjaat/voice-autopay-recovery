@@ -5,8 +5,8 @@ Values are read from environment variables, optionally loaded from a local
 
 Why everything is Optional
 --------------------------
-Phase 0 must boot with no configuration at all, so no integration variable is
-required at import time. Instead, each phase calls ``settings.require(...)`` at
+The application must boot with no configuration at all, so no integration
+variable is required at import time. Instead, each phase calls ``settings.require(...)`` at
 the point of use, which raises a single clear error naming exactly which
 variables are missing — rather than failing deep inside a request handler with
 a ``NoneType`` error.
@@ -21,7 +21,6 @@ from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Repository root: this file is <root>/app/config.py
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # E.164: a leading '+', a non-zero country code, then 7-14 more digits.
@@ -69,15 +68,15 @@ class Settings(BaseSettings):
     app_port: int = 8000
     log_level: str = "INFO"
 
-    # --- ElevenLabs Agents (Phase 6+) --------------------------------------
+    # --- ElevenLabs Agents -------------------------------------------------
     elevenlabs_api_key: str | None = None
     elevenlabs_agent_id: str | None = None
     elevenlabs_webhook_secret: str | None = None
 
-    # --- Our own tool authentication (Phase 2+) ----------------------------
+    # --- Our own tool authentication ---------------------------------------
     tool_shared_secret: str | None = None
 
-    # --- Public tunnel, so ElevenLabs can reach our tools (Phase 6+) -------
+    # --- Public tunnel, so ElevenLabs can reach our tools ------------------
     public_base_url: str | None = None
 
     # --- Dial safety -------------------------------------------------------
@@ -86,13 +85,11 @@ class Settings(BaseSettings):
     # The only destination this project is ever permitted to dial.
     demo_phone_number: str | None = None
 
-    # --- Telephony identifier (Phase 9; not a credential) ------------------
+    # --- Telephony identifier (not a credential) ---------------------------
     # Provider-neutral on purpose: the dial guard and the eventual provider
     # adapter both refer to "the number we call from", whoever supplies it.
     agent_phone_number_id: str | None = None
 
-    # --- Optional: offline text simulator (Phase 4) ------------------------
-    anthropic_api_key: str | None = None
 
     # ----------------------------------------------------------------- paths
     @property
@@ -131,7 +128,7 @@ class Settings(BaseSettings):
 
     @field_validator("public_base_url", "elevenlabs_api_key", "elevenlabs_agent_id",
                      "elevenlabs_webhook_secret", "tool_shared_secret",
-                     "agent_phone_number_id", "anthropic_api_key",
+                     "agent_phone_number_id",
                      mode="before")
     @classmethod
     def _blank_to_none(cls, value: object) -> object:

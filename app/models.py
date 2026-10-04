@@ -98,10 +98,9 @@ class Disposition(str, Enum):
     A closed set: ``log_disposition`` rejects anything outside it, so the
     agent cannot invent an outcome label that later reporting cannot count.
 
-    The first eight are the agreed Phase 2 vocabulary. ``WRONG_NUMBER`` and
-    ``NO_ANSWER`` are added for the telephony branches of the conversation
-    flow (reached the wrong person, or voicemail), which have to be recordable
-    once Phase 9 can place a real call.
+    ``WRONG_NUMBER`` and ``NO_ANSWER`` cover the telephony branches of the
+    conversation flow (reached the wrong person, or voicemail), which have to
+    be recordable if a real call is ever placed.
     """
 
     PAYMENT_RECOVERED = "payment_recovered"
@@ -698,7 +697,6 @@ class SessionStateResponse(BaseModel):
     do_not_call: bool
     tool_calls: int
     event_count: int
-    # Phase 7: the conversation's own outcome and completion metadata.
     outcome: Disposition | None = None
     call_completed: bool = False
     completed_at: datetime | None = None

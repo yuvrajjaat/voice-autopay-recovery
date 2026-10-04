@@ -11,10 +11,10 @@ Intended architecture
     call request  ->  dial_safety  ->  authorized?  ->  provider
 
 There is deliberately **no** second copy of these checks inside a provider
-adapter. Phase 9's telephony code calls :func:`assert_dial_allowed` before it
-is allowed to touch an API, so adding a provider cannot accidentally add a
-bypass. If you are reading this while writing that adapter: call the guard
-first, and do not re-implement any part of it.
+adapter. Any future telephony code must call :func:`assert_dial_allowed`
+before it is allowed to touch an API, so adding a provider cannot accidentally
+add a bypass. If you are reading this while writing that adapter: call the
+guard first, and do not re-implement any part of it.
 
 What it refuses
 ---------------

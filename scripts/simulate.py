@@ -9,7 +9,7 @@ How it avoids being a second implementation
 -------------------------------------------
 It calls the real ``/tools/*`` endpoints through FastAPI's in-process test
 client. Same routes, same guards, same mock processor, same JSON that
-ElevenLabs will receive in Phase 6 — just no socket in the middle. Nothing
+ElevenLabs receives in the live demo — just no socket in the middle. Nothing
 about payment retries, verification, scheduling, links, escalation, or
 dispositions is reimplemented here.
 
@@ -19,8 +19,8 @@ A deterministic decision engine, driven by two things: the scripted intent of
 the fictional caller, and the ``next_action`` each tool returns. That is
 exactly the contract the system prompt asks the model to follow, so a passing
 scenario here means the prompt has a coherent path to walk. What it cannot
-test is whether the model *will* follow it — that needs real voice minutes,
-which is Phase 6.
+test is whether the model *will* follow it — that needs real voice minutes
+and a live conversation.
 
 Usage::
 
@@ -144,19 +144,17 @@ class Conversation:
         self.lines: list[Line] = []
         self.tools_called: list[str] = []
 
-    # -- transcript ------------------------------------------------------
     def agent(self, text: str) -> None:
         self.lines.append(Line("agent", text))
 
     def customer_says(self, text: str) -> None:
         self.lines.append(Line("customer", text))
 
-    # -- tools -----------------------------------------------------------
     def call(self, name: str, **arguments: Any) -> dict[str, Any]:
         """Invoke a real tool endpoint and record it.
 
         Guards against calling a tool the specs do not declare, which is how a
-        typo here would otherwise become a silent 404 in Phase 6.
+        typo here would otherwise become a silent 404 against the live agent.
         """
         if name not in tool_names():
             raise ValueError(f"{name!r} is not a declared tool")

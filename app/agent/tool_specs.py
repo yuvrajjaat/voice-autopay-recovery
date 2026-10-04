@@ -2,8 +2,8 @@
 
 This is the single description of the tool surface, consumed by:
 
-* the ElevenLabs provisioning script in Phase 6, which turns each spec into a
-  webhook tool (URL, method, body schema, auth header);
+* the ElevenLabs provisioning script, which turns each spec into a webhook
+  tool (URL, method, body schema, auth header);
 * the offline simulator, which checks it only calls tools that exist;
 * the test suite, which asserts every spec matches a real route.
 

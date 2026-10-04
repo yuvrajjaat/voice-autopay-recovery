@@ -16,19 +16,11 @@ python-dotenv==1.2.4
 # --- HTTP client (ElevenLabs REST calls + FastAPI TestClient transport) ---
 httpx==0.28.1
 
-# --- Templates (dashboard + voice widget page, added in a later phase) ---
+# --- Templates (dashboard and voice pages) ---
 jinja2==3.1.6
 
-# --- Voice provider SDK (used from Phase 6 onward) ---
+# --- Voice provider SDK ---
 elevenlabs==2.70.0
 
 # --- Tests ---
 pytest==9.1.1
-
-# --- Optional extras, intentionally not installed by default -------------
-# Each is needed by exactly one script, so a reviewer can skip both.
-#
-# pyaudio==0.2.14   # only for scripts/talk.py (terminal microphone demo).
-#                   # install with: pip install "elevenlabs[pyaudio]"
-#                   # Not needed at all for the browser widget demo.
-# anthropic>=0.40   # only for scripts/simulate.py (offline text harness)

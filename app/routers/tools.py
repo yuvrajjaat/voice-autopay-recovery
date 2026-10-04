@@ -72,11 +72,6 @@ RETRY_LATENCY_SECONDS = 0.8
 
 CALLBACK_WINDOW = "within one business day"
 
-#: Temporary: log each verification comparison while confirming what the
-#: voice provider actually sends as `postal_code`. Never logs the expected
-#: answer. Flip to False once the provider payload is confirmed.
-VERIFY_DIAGNOSTIC_LOGGING = True
-
 #: Which decline codes cannot be fixed by trying the same card again, and
 #: what the agent should do instead.
 _TERMINAL_NEXT_ACTION: dict[FailureCode, NextAction] = {
@@ -364,25 +359,14 @@ async def verify_identity(request: VerifyIdentityRequest) -> VerifyIdentityRespo
     attempts_used = session.verification_attempts + 1
     matched = secrets.compare_digest(given, expected)
 
-    # --- temporary diagnostic ------------------------------------------
-    # Added while chasing a live failure where a caller stated the correct
-    # postal code and verification still failed. Logs the stated answer and
-    # the comparison result, never the expected answer. Set
-    # VERIFY_DIAGNOSTIC_LOGGING = False (or delete this block) once the
-    # provider's exact payload has been confirmed.
-    if VERIFY_DIAGNOSTIC_LOGGING:
-        logger.info(
-            "verify_identity diagnostic: session=%s customer=%s attempt=%d/%d "
-            "stated=%r normalised=%r matched=%s",
-            session.session_id,
-            customer.customer_id,
-            attempts_used,
-            limit,
-            request.postal_code,
-            given,
-            matched,
-        )
-    # -------------------------------------------------------------------
+    logger.info(
+        "verify_identity: session=%s customer=%s attempt=%d/%d matched=%s",
+        session.session_id,
+        customer.customer_id,
+        attempts_used,
+        limit,
+        matched,
+    )
 
     store.update_session(
         session.session_id,
@@ -803,7 +787,7 @@ async def log_disposition(request: LogDispositionRequest) -> DispositionResponse
 
     ``do_not_call`` is persisted against the customer, not just the session,
     because the request has to outlive the call it was made on. Nothing places
-    outbound calls yet, but when Phase 9 does, this is the flag it checks.
+    outbound calls today, but this is the flag the dial guard checks.
     """
     session, customer, current = _resolve(request.session_id)
 
