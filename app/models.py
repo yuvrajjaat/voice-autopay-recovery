@@ -558,3 +558,182 @@ class ToolErrorResponse(BaseModel):
     success: Literal[False] = False
     error: str
     message: str
+
+
+# ---------------------------------------------------------------------------
+# Session events
+#
+# The demo dashboard needs a chronological narrative of what happened on a
+# call. The audit collections (attempts, links, escalations) each hold part of
+# that story but not all of it — nothing records that identity was verified,
+# or that details were looked up and withheld. So tools append to one
+# append-only event log instead.
+#
+# Ordering uses a monotonic `sequence` rather than the timestamp: several
+# events can land inside the same millisecond, and "chronological" has to be
+# exact when the dashboard is being filmed.
+# ---------------------------------------------------------------------------
+
+
+class EventType(str, Enum):
+    """Everything the dashboard can show on a session timeline."""
+
+    SESSION_CREATED = "session_created"
+    SESSION_RESET = "session_reset"
+    PAYMENT_DETAILS_VIEWED = "payment_details_viewed"
+    PAYMENT_DETAILS_WITHHELD = "payment_details_withheld"
+    IDENTITY_VERIFIED = "identity_verified"
+    IDENTITY_VERIFICATION_FAILED = "identity_verification_failed"
+    IDENTITY_VERIFICATION_LOCKED = "identity_verification_locked"
+    PAYMENT_RETRY_ATTEMPTED = "payment_retry_attempted"
+    PAYMENT_RETRY_SUCCEEDED = "payment_retry_succeeded"
+    PAYMENT_RETRY_DECLINED = "payment_retry_declined"
+    PAYMENT_RETRY_SKIPPED = "payment_retry_skipped"
+    PAYMENT_SCHEDULED = "payment_scheduled"
+    PAYMENT_LINK_PREPARED = "payment_link_prepared"
+    HUMAN_ESCALATION_CREATED = "human_escalation_created"
+    DISPOSITION_LOGGED = "disposition_logged"
+
+
+class SessionEvent(RuntimeModel):
+    """One entry on a session's timeline.
+
+    ``detail`` holds a few short, safe strings for the dashboard. It must
+    never carry a verification answer, a submitted postal code, a secret, or
+    an internal payment identifier.
+    """
+
+    sequence: int
+    session_id: str
+    customer_id: str
+    event_type: EventType
+    summary: str
+    detail: dict[str, str] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+# ---------------------------------------------------------------------------
+# Demo control plane: request and response schemas
+#
+# These serve the local dashboard, not the voice agent. They are deliberately
+# separate from the tool schemas above, and they are hand-built rather than
+# dumps of the internal models — serialising `Customer` wholesale would leak
+# the verification answer, the postal code it is derived from, and the
+# internal payment identifiers.
+# ---------------------------------------------------------------------------
+
+
+class CreateSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    customer_id: str = Field(pattern=r"^CUST-\d{3}$")
+    channel: Literal["web", "phone", "simulator", "test"] = "web"
+
+
+class CreateSessionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    customer_id: str
+    customer_name: str
+    status: Literal["active", "closed"]
+    channel: str
+    created_at: datetime
+
+
+class SessionStateResponse(BaseModel):
+    """Everything the dashboard shows about a live session."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    customer_id: str
+    customer_name: str
+    status: Literal["active", "closed"]
+    channel: str
+    identity_verified: bool
+    verification_attempts: int
+    verification_attempts_allowed: int
+    payment_status: AutopayStatus
+    amount_due: str
+    currency: str
+    retry_attempts: int
+    last_confirmation_number: str | None = None
+    scheduled_for: date | None = None
+    payment_link_prepared: bool
+    escalated: bool
+    escalation_ticket: str | None = None
+    disposition: Disposition | None = None
+    disposition_notes: str | None = None
+    do_not_call: bool
+    tool_calls: int
+    event_count: int
+    created_at: datetime
+    last_tool_at: datetime | None = None
+
+
+class CustomerSummary(BaseModel):
+    """A customer as the dashboard's selection list sees them.
+
+    Note the absences: no postal code, no verification answer, no payment or
+    payment-method identifiers. The postal code is the verification answer, so
+    exposing the address would hand over the credential by another route.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    customer_id: str
+    name: str
+    phone: str
+    email: str
+    plan_name: str
+    amount: str
+    currency: str
+    failure_reason: FailureCode
+    failure_explanation: str
+    days_delinquent: int
+    card_description: str
+    scenario_label: str
+    expected_path: str
+    caller_intent: str
+    payment_status: AutopayStatus
+    do_not_call: bool
+
+
+class CustomerDetail(CustomerSummary):
+    """One customer, with the extra context the dashboard panel shows."""
+
+    city: str
+    state: str
+    timezone: str
+    billing_period: str
+    due_date: date
+    failed_at: datetime
+    attempts_before_this_call: int
+    service_suspension_date: date | None = None
+    backup_method_available: bool
+    verification_method: str
+    verification_attempts_allowed: int
+
+
+class SessionEventOut(BaseModel):
+    """One timeline entry, as served to the dashboard."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sequence: int
+    event_type: EventType
+    summary: str
+    detail: dict[str, str]
+    created_at: datetime
+
+
+class ResetSessionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    customer_id: str
+    status: Literal["active", "closed"]
+    message: str
+    records_cleared: int
+    seed_unchanged: bool = True

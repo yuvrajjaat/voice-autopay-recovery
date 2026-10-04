@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Autopay Recovery — Demo Dashboard</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div>
+    <h1>Autopay Recovery <span class="muted">demo dashboard</span></h1>
+    <p class="subtitle">
+      All data is fictional. Payments are fully mocked. No calls, messages, or
+      real charges are made anywhere in this project.
+    </p>
+  </div>
+  <div class="badges">
+    <span class="pill pill-neutral">v{{ version }}</span>
+    {% if tool_auth_configured %}
+      <span class="pill pill-ok" title="TOOL_SHARED_SECRET is set">tool auth ready</span>
+    {% else %}
+      <span class="pill pill-warn" title="TOOL_SHARED_SECRET is not set; /tools/* returns 503">
+        tool auth not configured
+      </span>
+    {% endif %}
+    {% if outbound_calls_enabled %}
+      <span class="pill pill-warn">outbound calls ENABLED</span>
+    {% else %}
+      <span class="pill pill-ok">outbound calls disabled</span>
+    {% endif %}
+  </div>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<main class="layout">
+
+  <!-- ------------------------------------------------ customer selection -->
+  <section class="panel panel-wide">
+    <div class="panel-head">
+      <h2>1 &middot; Choose a customer</h2>
+      <span id="customer-count" class="muted"></span>
+    </div>
+    <div class="table-scroll">
+      <table id="customers">
+        <thead>
+          <tr>
+            <th></th>
+            <th>ID</th>
+            <th>Name</th>
+            <th class="num">Amount</th>
+            <th>Failure reason</th>
+            <th>Scenario</th>
+            <th>Ledger status</th>
+          </tr>
+        </thead>
+        <tbody id="customer-rows">
+          <tr><td colspan="7" class="muted">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p id="caller-intent" class="hint" hidden></p>
+  </section>
+
+  <!-- ------------------------------------------------------- session ---- -->
+  <section class="panel">
+    <div class="panel-head"><h2>2 &middot; Session</h2></div>
+
+    <div class="controls">
+      <button id="btn-create" class="primary" disabled>Create session</button>
+      <button id="btn-refresh-state" disabled>Refresh state</button>
+      <button id="btn-refresh-events" disabled>Refresh events</button>
+      <button id="btn-reset" class="danger" disabled>Reset session</button>
+    </div>
+
+    <label class="auto">
+      <input type="checkbox" id="auto-refresh" checked>
+      Auto-refresh every 2s
+      <span id="tick" class="muted"></span>
+    </label>
+
+    <div id="session-id-box" class="session-id" hidden>
+      <span class="muted">session</span>
+      <code id="session-id"></code>
+      <button id="btn-copy" class="link">copy</button>
+    </div>
+
+    <dl id="state" class="kv">
+      <div class="kv-empty muted">No session yet. Pick a customer and create one.</div>
+    </dl>
+  </section>
+
+  <!-- --------------------------------------------------------- events --- -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2>3 &middot; Event timeline</h2>
+      <span id="event-count" class="muted"></span>
+    </div>
+    <ol id="events" class="events">
+      <li class="muted">No events yet.</li>
+    </ol>
+  </section>
+
+  <!-- -------------------------------------------------- driving a flow --- -->
+  <section class="panel panel-wide">
+    <div class="panel-head"><h2>Drive a flow</h2></div>
+    <p class="hint">
+      This dashboard observes; it does not call the tools. That keeps
+      <code>TOOL_SHARED_SECRET</code> out of the browser — from Phase&nbsp;6 the
+      voice agent drives these same endpoints while you watch this page. Until
+      then, drive them from a terminal:
+    </p>
+    <pre id="curl" class="code">Create a session to see the commands.</pre>
+  </section>
+
+</main>
+
+<footer class="footer muted">
+  Fictional customers &middot; mocked payment processor &middot; no telephony in this phase
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

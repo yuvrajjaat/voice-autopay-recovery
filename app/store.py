@@ -43,11 +43,13 @@ from app.models import (
     CustomerState,
     Disposition,
     Escalation,
+    EventType,
     PaymentAttempt,
     PaymentLink,
     PaymentResult,
     ScheduledRetry,
     Session,
+    SessionEvent,
     utc_now,
 )
 
@@ -167,6 +169,8 @@ def empty_runtime() -> dict[str, Any]:
         "payment_links": [],
         "escalations": [],
         "dispositions": [],
+        "events": [],
+        "event_sequence": 0,
     }
 
 
@@ -416,6 +420,7 @@ def record_disposition(
     customer_id: str,
     disposition: Disposition,
     notes: str | None = None,
+    session_id: str | None = None,
 ) -> CustomerState:
     """Record how a conversation ended.
 
@@ -427,6 +432,7 @@ def record_disposition(
         document["dispositions"].append(
             {
                 "customer_id": customer_id,
+                "session_id": session_id,
                 "disposition": disposition.value,
                 "notes": notes,
                 "created_at": utc_now().isoformat(),
@@ -582,3 +588,115 @@ def get_dispositions(customer_id: str | None = None) -> list[dict[str, Any]]:
     if customer_id is None:
         return list(records)
     return [r for r in records if r.get("customer_id") == customer_id]
+
+
+# ---------------------------------------------------------------------------
+# Session event log
+# ---------------------------------------------------------------------------
+
+
+def record_event(
+    session_id: str,
+    customer_id: str,
+    event_type: EventType,
+    summary: str,
+    detail: dict[str, str] | None = None,
+) -> SessionEvent:
+    """Append one entry to a session's timeline.
+
+    ``sequence`` comes from a monotonic counter in the runtime document rather
+    than from the clock, so two events written in the same millisecond still
+    have a defined order. The dashboard sorts on it.
+    """
+    with _lock:
+        document = load_runtime()
+        document["event_sequence"] = int(document.get("event_sequence", 0)) + 1
+        event = SessionEvent(
+            sequence=document["event_sequence"],
+            session_id=session_id,
+            customer_id=customer_id,
+            event_type=event_type,
+            summary=summary,
+            detail=detail or {},
+        )
+        document["events"].append(json.loads(event.model_dump_json()))
+        _write_runtime(document)
+        return event
+
+
+def get_events(session_id: str | None = None) -> list[dict[str, Any]]:
+    """Timeline entries in chronological order, optionally for one session."""
+    events = load_runtime()["events"]
+    if session_id is not None:
+        events = [e for e in events if e.get("session_id") == session_id]
+    return sorted(events, key=lambda event: event.get("sequence", 0))
+
+
+# ---------------------------------------------------------------------------
+# Scoped reset
+# ---------------------------------------------------------------------------
+
+#: Collections whose records carry a session_id and so can be reset per session.
+_SESSION_SCOPED_COLLECTIONS = (
+    "payment_attempts",
+    "scheduled_retries",
+    "payment_links",
+    "escalations",
+    "dispositions",
+    "events",
+)
+
+
+def reset_session(session_id: str) -> tuple[Session, int]:
+    """Clear one session's runtime state and reopen it for another run.
+
+    Returns the reopened session and how many records were discarded.
+
+    Scope: every audit record tagged with this ``session_id``, plus the
+    customer's ledger row, plus the session's own counters. Other sessions and
+    their records are untouched, and ``data/customers.json`` is never opened
+    for writing — the seed is what the reset restores *to*.
+
+    One caveat worth knowing: the ledger row is keyed by customer, not by
+    session. Two open sessions on the same customer therefore share one row,
+    and resetting either clears it for both. The dashboard drives one session
+    at a time, so this does not arise in practice.
+    """
+    with _lock:
+        session = get_session(session_id)
+        document = load_runtime()
+
+        cleared = 0
+        for collection in _SESSION_SCOPED_COLLECTIONS:
+            before = len(document[collection])
+            document[collection] = [
+                record
+                for record in document[collection]
+                if record.get("session_id") != session_id
+            ]
+            cleared += before - len(document[collection])
+
+        # Drop the customer's ledger row so get_state() falls back to the seed.
+        if document["customer_state"].pop(session.customer_id, None) is not None:
+            cleared += 1
+
+        reopened = session.model_copy(
+            update={
+                "closed": False,
+                "tool_calls": 0,
+                "retry_attempts": 0,
+                "last_tool_at": None,
+            }
+        )
+        document["sessions"][session_id] = json.loads(reopened.model_dump_json())
+        _write_runtime(document)
+
+    record_event(
+        session_id,
+        session.customer_id,
+        EventType.SESSION_RESET,
+        "Session reset for another demo run.",
+        {"records_cleared": str(cleared)},
+    )
+    logger.info("session %s reset (%d records cleared)", session_id, cleared)
+    return reopened, cleared

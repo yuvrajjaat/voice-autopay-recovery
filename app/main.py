@@ -16,6 +16,7 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.config import settings
@@ -25,7 +26,7 @@ from app.errors import (
     unhandled_error_handler,
     validation_error_handler,
 )
-from app.routers import tools
+from app.routers import demo, pages, tools
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level),
@@ -37,7 +38,9 @@ logger = logging.getLogger("app")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Log a readable startup banner, then hand over to the server."""
-    logger.info("%s v%s starting (phase 2 - tool layer)", settings.app_name, __version__)
+    logger.info(
+        "%s v%s starting (phase 3 - dashboard)", settings.app_name, __version__
+    )
     # The dial-safety toggle is reported separately below; it is a switch, not
     # a credential, so listing it as "not configured" would read as a problem.
     ready = {
@@ -73,10 +76,18 @@ app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.add_exception_handler(Exception, unhandled_error_handler)
 
 app.include_router(tools.router)  # Phase 2 — the agent's seven tools
+app.include_router(demo.router)  # Phase 3 — local demo control plane
+app.include_router(pages.router)  # Phase 3 — the dashboard page
+
+# Dashboard assets. Mounted from an absolute path so the server can be
+# started from any working directory.
+app.mount(
+    "/static",
+    StaticFiles(directory=str(settings.base_dir / "static")),
+    name="static",
+)
 
 # Routers still to come:
-#   app.include_router(demo.router)      # Phase 3 — dashboard control plane
-#   app.include_router(pages.router)     # Phase 3 — dashboard + voice page
 #   app.include_router(webhooks.router)  # Phase 7 — post-call transcripts
 
 
@@ -91,17 +102,18 @@ async def healthz() -> dict[str, Any]:
         "status": "ok",
         "service": settings.app_name,
         "version": __version__,
-        "phase": "2 - agent tool layer",
+        "phase": "3 - demo control plane and dashboard",
         "config": settings.readiness(),
     }
 
 
 @app.get("/", tags=["system"])
 async def root() -> dict[str, str]:
-    """Placeholder root. The dashboard replaces this in Phase 3."""
+    """Service index. The human-facing page is /dashboard."""
     return {
         "service": settings.app_name,
         "version": __version__,
         "health": "/healthz",
         "docs": "/docs",
+        "dashboard": "/dashboard",
     }

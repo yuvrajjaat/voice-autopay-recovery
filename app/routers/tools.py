@@ -36,6 +36,7 @@ from app.models import (
     DispositionResponse,
     EscalateRequest,
     EscalationResponse,
+    EventType,
     FailedPaymentDetailsResponse,
     FailureCode,
     LogDispositionRequest,
@@ -192,6 +193,12 @@ async def get_failed_payment_details(
     store.touch_session(session.session_id)
 
     if not state.identity_verified:
+        store.record_event(
+            session.session_id,
+            customer.customer_id,
+            EventType.PAYMENT_DETAILS_WITHHELD,
+            "Payment details requested before verification - figures withheld.",
+        )
         return FailedPaymentDetailsResponse(
             success=True,
             verified=False,
@@ -216,6 +223,17 @@ async def get_failed_payment_details(
             payment.failure_code, NextAction.PAYMENT_LINK_OR_ESCALATION
         )
 
+    store.record_event(
+        session.session_id,
+        customer.customer_id,
+        EventType.PAYMENT_DETAILS_VIEWED,
+        f"Explained the failed {payment.amount_spoken} {payment.currency} autopay.",
+        {
+            "amount": payment.amount_spoken,
+            "failure_reason": payment.failure_code.value,
+            "retry_worth_attempting": str(worth_retrying).lower(),
+        },
+    )
     return FailedPaymentDetailsResponse(
         success=True,
         verified=True,
@@ -279,6 +297,12 @@ async def verify_identity(request: VerifyIdentityRequest) -> VerifyIdentityRespo
         )
 
     if state.verification_attempts >= limit:
+        store.record_event(
+            session.session_id,
+            customer.customer_id,
+            EventType.IDENTITY_VERIFICATION_LOCKED,
+            "Further verification attempt refused - the limit was already reached.",
+        )
         return VerifyIdentityResponse(
             success=True,
             verified=False,
@@ -304,6 +328,13 @@ async def verify_identity(request: VerifyIdentityRequest) -> VerifyIdentityRespo
     remaining = max(limit - attempts_used, 0)
 
     if matched:
+        store.record_event(
+            session.session_id,
+            customer.customer_id,
+            EventType.IDENTITY_VERIFIED,
+            f"Identity verified on attempt {attempts_used}.",
+            {"attempts_used": str(attempts_used)},
+        )
         return VerifyIdentityResponse(
             success=True,
             verified=True,
@@ -313,6 +344,13 @@ async def verify_identity(request: VerifyIdentityRequest) -> VerifyIdentityRespo
         )
 
     if remaining == 0:
+        store.record_event(
+            session.session_id,
+            customer.customer_id,
+            EventType.IDENTITY_VERIFICATION_LOCKED,
+            "Verification failed on the final attempt - locked for this call.",
+            {"attempts_used": str(attempts_used)},
+        )
         return VerifyIdentityResponse(
             success=True,
             verified=False,
@@ -325,6 +363,13 @@ async def verify_identity(request: VerifyIdentityRequest) -> VerifyIdentityRespo
             next_action=NextAction.ESCALATE,
         )
 
+    store.record_event(
+        session.session_id,
+        customer.customer_id,
+        EventType.IDENTITY_VERIFICATION_FAILED,
+        f"Verification attempt {attempts_used} did not match.",
+        {"attempts_remaining": str(remaining)},
+    )
     return VerifyIdentityResponse(
         success=True,
         verified=False,
@@ -377,6 +422,13 @@ async def retry_payment(request: RetryPaymentRequest) -> RetryPaymentResponse:
         )
         if customer.autopay.backup_method is not None:
             next_action = NextAction.OFFER_BACKUP_METHOD
+        store.record_event(
+            session.session_id,
+            customer.customer_id,
+            EventType.PAYMENT_RETRY_SKIPPED,
+            f"Retry not attempted - {failure_code.value} is not recoverable on that card.",
+            {"failure_reason": failure_code.value, "next_action": next_action.value},
+        )
         return RetryPaymentResponse(
             success=False,
             status="not_attempted",
@@ -410,8 +462,27 @@ async def retry_payment(request: RetryPaymentRequest) -> RetryPaymentResponse:
         session_id=session.session_id,
     )
     store.touch_session(session.session_id, retry=True)
+    store.record_event(
+        session.session_id,
+        customer.customer_id,
+        EventType.PAYMENT_RETRY_ATTEMPTED,
+        f"Retry {attempt_number} sent to the mock processor "
+        f"on the {request.payment_method} card.",
+        {"attempt": str(attempt_number), "payment_method": request.payment_method},
+    )
 
     if result.success:
+        store.record_event(
+            session.session_id,
+            customer.customer_id,
+            EventType.PAYMENT_RETRY_SUCCEEDED,
+            f"Payment approved: {result.amount:.2f} {result.currency}.",
+            {
+                "amount": f"{result.amount:.2f}",
+                "confirmation_number": result.confirmation_number or "",
+                "transaction_id": result.transaction_id,
+            },
+        )
         return RetryPaymentResponse(
             success=True,
             status="paid",
@@ -438,6 +509,13 @@ async def retry_payment(request: RetryPaymentRequest) -> RetryPaymentResponse:
             result.failure_code, NextAction.PAYMENT_LINK_OR_ESCALATION
         )
 
+    store.record_event(
+        session.session_id,
+        customer.customer_id,
+        EventType.PAYMENT_RETRY_DECLINED,
+        f"Payment declined: {result.failure_code.value}.",
+        {"failure_reason": result.failure_code.value, "next_action": next_action.value},
+    )
     return RetryPaymentResponse(
         success=False,
         status="declined",
@@ -501,6 +579,17 @@ async def schedule_retry(request: ScheduleRetryRequest) -> ScheduleRetryResponse
         requested_action=request.requested_action,
     )
     store.touch_session(session.session_id)
+    store.record_event(
+        session.session_id,
+        customer.customer_id,
+        EventType.PAYMENT_SCHEDULED,
+        f"Retry noted for {retry.scheduled_for.isoformat()} (record only, no job).",
+        {
+            "scheduled_for": retry.scheduled_for.isoformat(),
+            "requested_action": retry.requested_action,
+            "confirmation_number": confirmation_number,
+        },
+    )
 
     return ScheduleRetryResponse(
         success=True,
@@ -556,6 +645,14 @@ async def send_payment_link(
     )
     store.touch_session(session.session_id)
 
+    store.record_event(
+        session.session_id,
+        customer.customer_id,
+        EventType.PAYMENT_LINK_PREPARED,
+        f"Payment link prepared for {link.sent_to_masked} (not sent).",
+        {"channel": link.channel, "delivered": "false", "link_id": link.link_id},
+    )
+
     destination = "number" if request.channel == "sms" else "email address"
     return SendPaymentLinkResponse(
         success=True,
@@ -604,6 +701,13 @@ async def escalate_to_human(request: EscalateRequest) -> EscalationResponse:
     )
     store.touch_session(session.session_id)
 
+    store.record_event(
+        session.session_id,
+        customer.customer_id,
+        EventType.HUMAN_ESCALATION_CREATED,
+        f"Escalated to a human: {request.reason}",
+        {"ticket_id": ticket_id, "callback_window": CALLBACK_WINDOW},
+    )
     return EscalationResponse(
         success=True,
         status=escalation.status,
@@ -654,9 +758,22 @@ async def log_disposition(request: LogDispositionRequest) -> DispositionResponse
         )
 
     state = store.record_disposition(
-        customer.customer_id, request.disposition, request.notes
+        customer.customer_id,
+        request.disposition,
+        request.notes,
+        session_id=session.session_id,
     )
     store.touch_session(session.session_id)
+    store.record_event(
+        session.session_id,
+        customer.customer_id,
+        EventType.DISPOSITION_LOGGED,
+        f"Call closed as {request.disposition.value}.",
+        {
+            "disposition": request.disposition.value,
+            "do_not_call": str(state.do_not_call).lower(),
+        },
+    )
     store.close_session(session.session_id)
 
     if request.disposition is Disposition.DO_NOT_CALL:
